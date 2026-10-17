@@ -100,7 +100,7 @@ export default {
       return env.TRIP_ROOM.get(id).fetch(request);
     }
 
-    return json({ error: 'Not found' }, 404);
+    return env.ASSETS.fetch(request);
   },
 } satisfies ExportedHandler<Env>;
 
