@@ -3,6 +3,8 @@
 body { margin: 0; min-width: 320px; background: radial-gradient(circle at 80% 0%, #1c2c2c 0, #0d1117 34rem); }
 button, input { font: inherit; }
 .shell { width: min(1100px, calc(100% - 32px)); margin: 0 auto; padding: 30px 0 22px; }
+.update-banner { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 16px; border: 1px solid #6d8d5a; border-radius: 12px; padding: 12px 14px; color: #d9f5c7; background: #1c331f; font-size: 13px; }
+.update-banner button { border: 1px solid #9bca83; border-radius: 999px; padding: 7px 12px; color: #112014; background: #b7e29f; cursor: pointer; font-weight: 700; }
 .topbar, .panel-heading, .check-row, .range-row, footer, .location-line { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .topbar { margin-bottom: 44px; }
 .eyebrow { margin: 0 0 8px; color: #9db5a6; font-size: 11px; font-weight: 800; letter-spacing: .16em; }
