@@ -159,6 +159,17 @@ export default {
       return json({ memberId, displayName: slotCode, slotCode }, 201, request);
     }
 
+    if (tripMatch && url.pathname.endsWith('/members') && request.method === 'DELETE') {
+      const body = await readJson(request);
+      const memberId = typeof body?.memberId === 'string' ? body.memberId.trim().slice(0, 80) : '';
+      if (!memberId) return json({ error: 'Member id is required' }, 400, request);
+      await env.DB.batch([
+        env.DB.prepare('UPDATE trip_slots SET member_id = NULL, claimed_at = NULL WHERE trip_id = ? AND member_id = ?').bind(tripMatch[1], memberId),
+        env.DB.prepare('DELETE FROM trip_members WHERE trip_id = ? AND member_id = ?').bind(tripMatch[1], memberId),
+      ]);
+      return json({ ok: true }, 200, request);
+    }
+
     const socketMatch = url.pathname.match(/^\/ws\/([A-Za-z0-9_-]{4,64})$/);
     if (socketMatch && request.headers.get('Upgrade')?.toLowerCase() === 'websocket') {
       const id = env.TRIP_ROOM.idFromName(socketMatch[1]);
@@ -177,7 +188,7 @@ function corsHeaders(request?: Request): HeadersInit {
   const requestOrigin = request?.headers.get('Origin') ?? '';
   return {
     'access-control-allow-headers': 'content-type',
-    'access-control-allow-methods': 'GET, POST, OPTIONS',
+    'access-control-allow-methods': 'DELETE, GET, POST, OPTIONS',
     'access-control-allow-origin': APP_ORIGINS.has(requestOrigin) ? requestOrigin : 'https://weemap.vercel.app',
     'vary': 'Origin',
   };

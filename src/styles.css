@@ -77,7 +77,9 @@ h1 { margin: 0; color: #17221f; font-size: clamp(21px, 5vw, 28px); letter-spacin
 .trip-button { border: 0; border-radius: 10px; padding: 9px 11px; color: #f7fff4; background: #39794b; cursor: pointer; font-size: 11px; font-weight: 750; white-space: nowrap; }
 .trip-button:disabled { cursor: wait; opacity: .55; }
 .trip-button-soft { color: #39794b; background: #e2f1e6; }
+.trip-button-danger { color: #a34d3b; background: #f9e5df; }
 .trip-room { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 15px; padding-top: 14px; border-top: 1px solid #dfe8e1; color: #7b8c84; font-size: 10px; }
+.trip-room-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
 .trip-room strong { color: #39794b; font-size: 9px; font-weight: 650; }
 .trip-error { margin: 0; color: #a34d3b; font-size: 10px; }
 .trip-entry { display: grid; gap: 9px; margin-top: 15px; padding: 12px; border: 1px solid #dfe8e1; border-radius: 14px; color: #39794b; background: #f0f8f1; font-size: 11px; }
