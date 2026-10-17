@@ -5,13 +5,10 @@ import { loadGoogleMaps } from './lib/googleMaps';
 
 type CheckState = 'ok' | 'pending' | 'blocked';
 type Position = { latitude: number; longitude: number; accuracy: number; speed: number | null; timestamp: number };
+type MapController = { setZoom: (zoom: number) => void; panTo: (center: { lat: number; lng: number }) => void };
 
 function isStandalone(): boolean {
   return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
-}
-
-function statusLabel(state: CheckState): string {
-  return state === 'ok' ? 'Đạt' : state === 'blocked' ? 'Cần xử lý' : 'Đang kiểm tra';
 }
 
 export default function App() {
@@ -20,12 +17,15 @@ export default function App() {
   const [wakeState, setWakeState] = useState<CheckState>('pending');
   const [serverState, setServerState] = useState<CheckState>('pending');
   const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [mapZoom, setMapZoom] = useState(12);
   const [position, setPosition] = useState<Position | null>(null);
   const [speedLimit, setSpeedLimit] = useState(DEFAULT_SPEED_LIMIT);
   const [error, setError] = useState<string | null>(null);
   const wakeLock = useRef<WakeLockSentinel | null>(null);
   const watchId = useRef<number | null>(null);
   const socket = useRef<WebSocket | null>(null);
+  const mapInstance = useRef<MapController | null>(null);
   const memberId = useRef(crypto.randomUUID()).current;
   const mapRef = useRef<HTMLDivElement>(null);
   const mapsKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
@@ -146,61 +146,57 @@ export default function App() {
       .then(() => {
         if (!mapRef.current || !window.google?.maps) return;
         const center = position ? { lat: position.latitude, lng: position.longitude } : { lat: 10.7769, lng: 106.7009 };
-        new window.google.maps.Map(mapRef.current, { center, zoom: position ? 16 : 12, disableDefaultUI: true });
+        mapInstance.current = new window.google.maps.Map(mapRef.current, { center, zoom: mapZoom, disableDefaultUI: true });
       })
       .catch(() => setError('Không tải được Google Maps. Kiểm tra key local.'));
-  }, [mapsKey, position]);
+  }, [mapsKey, mapZoom, position]);
 
   return (
-    <main className="shell">
-      {updateAvailable && (
-        <div className="update-banner" role="status">
-          <span>Có bản cập nhật mới từ GitHub.</span>
-          <button type="button" onClick={() => window.location.reload()}>Tải lại</button>
-        </div>
-      )}
-      <header className="topbar">
-        <div><p className="eyebrow">PHASE 0 · PRIVATE BETA</p><h1>Group Navigation</h1></div>
-        <span className="pill">LOCAL ONLY</span>
-      </header>
+    <main className="map-shell">
+      <section className="map-stage" aria-label="Bản đồ WeeMap">
+        {mapsKey ? <div className="map" ref={mapRef} /> : <div className="map map-placeholder"><span>WEE<span>MAP</span></span><p>Đang chờ kết nối bản đồ.</p></div>}
 
-      <section className="hero">
-        <div><p className="eyebrow">DRIVING ASSISTANT</p><h2>Kiểm tra trước khi lăn bánh.</h2><p className="muted">GPS foreground và cảnh báo tốc độ thủ công.</p></div>
-        {speeding && <div className="warning">Giảm tốc độ · đang vượt {speedLimit} km/h</div>}
-      </section>
+        <header className="map-toolbar">
+          <div className="brand-lockup"><span className="brand-dot" /> <strong>WeeMap</strong><span className="trip-label">{tripId ? 'Đang theo đoàn' : 'Chưa vào đoàn'}</span></div>
+          <button className="round-button" type="button" aria-label="Mở cài đặt" onClick={() => setSettingsOpen((open) => !open)}>•••</button>
+        </header>
 
-      <section className="grid">
-        <div className="panel checklist">
-          <div className="panel-heading"><h3>Điều kiện thiết bị</h3><span>4 mục</span></div>
-          <CheckRow label="Đã cài vào màn hình chính" state={standalone ? 'ok' : 'blocked'} />
-          <CheckRow label="Quyền truy cập GPS" state={gpsState} />
-          <CheckRow label="Giữ màn hình sáng" state={wakeState} />
-          <CheckRow label="Kết nối máy chủ local" state={serverState} />
-          {!standalone && <p className="hint">Mở menu trình duyệt và chọn “Thêm vào Màn hình chính”.</p>}
+        {updateAvailable && (
+          <div className="update-banner" role="status">
+            <span>Có bản cập nhật mới.</span>
+            <button type="button" onClick={() => window.location.reload()}>Tải lại</button>
+          </div>
+        )}
+
+        <div className="map-status" aria-live="polite">
+          <span className={`status-dot status-${gpsState}`} />
+          <span>{position ? 'Đang định vị' : gpsState === 'blocked' ? 'GPS chưa sẵn sàng' : 'Đang tìm vị trí'}</span>
+          {position && <small>± {Math.round(position.accuracy)} m</small>}
         </div>
 
-        <div className="panel speed-panel">
-          <div className="panel-heading"><h3>Tốc độ hiện tại</h3><span>GPS</span></div>
-          <div className={`speed ${speeding ? 'speed-danger' : ''}`}>{currentSpeed ?? '—'}<small> km/h</small></div>
-          <label htmlFor="speed-limit">Ngưỡng cảnh báo</label>
-          <div className="range-row"><input id="speed-limit" type="range" min="30" max="120" step="5" value={speedLimit} onChange={(event) => setSpeedLimit(Number(event.target.value))} /><output>{speedLimit} km/h</output></div>
-          <p className="hint">Tốc độ đến từ GPS. Không phải giới hạn pháp lý.</p>
+        {position && <div className="location-marker" aria-label="Vị trí hiện tại"><span /></div>}
+
+        <div className="map-controls" aria-label="Điều khiển bản đồ">
+          <button className="map-control" type="button" aria-label="Phóng to" disabled={!mapsKey} onClick={() => { const nextZoom = Math.min(20, mapZoom + 1); setMapZoom(nextZoom); mapInstance.current?.setZoom(nextZoom); }}>+</button>
+          <button className="map-control" type="button" aria-label="Thu nhỏ" disabled={!mapsKey} onClick={() => { const nextZoom = Math.max(4, mapZoom - 1); setMapZoom(nextZoom); mapInstance.current?.setZoom(nextZoom); }}>−</button>
+          <button className="map-control locate-control" type="button" aria-label="Vị trí hiện tại" disabled={!mapsKey || !position} onClick={() => position && mapInstance.current?.panTo({ lat: position.latitude, lng: position.longitude })}>⌖</button>
+        </div>
+
+        <div className="map-sheet">
+          {speeding && <div className="speed-alert" role="alert">Giảm tốc độ · trên {speedLimit} km/h</div>}
+          <div className="sheet-heading"><div><span className="eyebrow">CHUYẾN ĐI</span><h1>{tripId ? 'Đoàn xe đang chạy' : 'Bản đồ của bạn'}</h1></div><span className={`connection-pill connection-${serverState}`}>{serverState === 'ok' ? 'Trực tuyến' : 'PoC'}</span></div>
+          <div className="driving-row">
+            <div><span className="metric-label">Tốc độ hiện tại</span><strong className={speeding ? 'speed-danger' : ''}>{currentSpeed ?? '—'} <small>km/h</small></strong></div>
+            <div className="driving-divider" />
+            <div><span className="metric-label">Cảnh báo ở</span><strong>{speedLimit} <small>km/h</small></strong></div>
+            {position && <span className="last-seen">{new Date(position.timestamp).toLocaleTimeString('vi-VN')}</span>}
+          </div>
+          {settingsOpen && <div className="settings-panel"><label htmlFor="speed-limit">Ngưỡng cảnh báo</label><div className="range-row"><input id="speed-limit" type="range" min="30" max="120" step="5" value={speedLimit} onChange={(event) => setSpeedLimit(Number(event.target.value))} /><output>{speedLimit} km/h</output></div><p>{standalone ? 'Đã cài trên màn hình chính.' : 'Thêm app vào màn hình chính để dùng ổn định hơn.'} {wakeState === 'ok' ? 'Màn hình đang được giữ sáng.' : 'Màn hình chưa được giữ sáng.'}</p></div>}
+          <div className="sheet-footer"><span>{position ? `${position.latitude.toFixed(5)}, ${position.longitude.toFixed(5)}` : error ?? 'Bật GPS để bắt đầu'}</span><span>Biển báo · phase sau</span></div>
         </div>
       </section>
-
-      <section className="panel map-panel">
-        <div className="panel-heading"><h3>Bản đồ đoàn xe</h3><span>{position ? 'Đã có vị trí' : 'Chờ GPS'}</span></div>
-        {mapsKey ? <div className="map" ref={mapRef} /> : <div className="map map-placeholder"><span>GOOGLE MAPS</span><p>Thêm `VITE_GOOGLE_MAPS_API_KEY` vào `.env.local` để bật bản đồ.</p></div>}
-        {position && <div className="location-line"><span>● {position.latitude.toFixed(5)}, {position.longitude.toFixed(5)}</span><span>± {Math.round(position.accuracy)} m</span><span>{new Date(position.timestamp).toLocaleTimeString('vi-VN')}</span></div>}
-      </section>
-
-      <footer><span>Biển báo và giới hạn tốc độ: phase sau.</span><span>{error ?? 'Không dùng dữ liệu thật trong PoC.'}</span></footer>
     </main>
   );
-}
-
-function CheckRow({ label, state }: { label: string; state: CheckState }) {
-  return <div className="check-row"><span className={`dot dot-${state}`} /> <span>{label}</span><strong>{statusLabel(state)}</strong></div>;
 }
 
 function sendPosition(socket: WebSocket, memberId: string, position: Position, speedKmh: number | null) {
