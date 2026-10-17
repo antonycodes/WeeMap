@@ -1,9 +1,15 @@
 {
-  "name": "Group Navigation",
-  "short_name": "Group Nav",
+  "name": "WeeMap - Di chuyển nhóm",
+  "short_name": "WeeMap",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0d1117",
   "theme_color": "#0d1117",
-  "icons": []
+  "icons": [
+    {
+      "src": "/icons/weemap.png",
+      "sizes": "474x474",
+      "type": "image/png"
+    }
+  ]
 }
