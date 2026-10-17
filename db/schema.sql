@@ -13,6 +13,18 @@ CREATE TABLE IF NOT EXISTS trip_members (
   PRIMARY KEY (trip_id, member_id)
 );
 
+CREATE TABLE IF NOT EXISTS trip_slots (
+  trip_id TEXT NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
+  slot_code TEXT NOT NULL,
+  member_id TEXT,
+  claimed_at TEXT,
+  PRIMARY KEY (trip_id, slot_code),
+  UNIQUE (trip_id, member_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_trip_slots_trip
+  ON trip_slots(trip_id);
+
 CREATE TABLE IF NOT EXISTS location_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   trip_id TEXT NOT NULL REFERENCES trips(id) ON DELETE CASCADE,

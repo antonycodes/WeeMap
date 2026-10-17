@@ -92,16 +92,38 @@ export default {
     if (url.pathname === '/api/trips' && request.method === 'POST') {
       const body = await readJson(request);
       const name = typeof body?.name === 'string' ? body.name.trim().slice(0, 80) : '';
+      const requestedCode = typeof body?.code === 'string' ? normalizeTripCode(body.code) : '';
+      const vehicleCodes = normalizeVehicleCodes(body?.vehicleCodes);
+      const leaderMemberId = typeof body?.memberId === 'string' ? body.memberId.trim().slice(0, 80) : '';
+      const leaderVehicleCode = typeof body?.vehicleCode === 'string' ? normalizeVehicleCode(body.vehicleCode) : '';
       if (!name) return json({ error: 'Trip name is required' }, 400, request);
-      const id = crypto.randomUUID();
-      await env.DB.prepare('INSERT INTO trips (id, name) VALUES (?, ?)').bind(id, name).run();
+      if (requestedCode && !isValidTripCode(requestedCode)) return json({ error: 'Trip code must use 4-32 letters, numbers, hyphens, or underscores' }, 400, request);
+      if (!leaderMemberId || !leaderVehicleCode || !vehicleCodes.length || vehicleCodes.length > MAX_VEHICLES || !vehicleCodes.includes(leaderVehicleCode)) {
+        return json({ error: 'Vehicle slots are required' }, 400, request);
+      }
+      const id = requestedCode || crypto.randomUUID();
+      const existing = await env.DB.prepare('SELECT id FROM trips WHERE id = ?').bind(id).first();
+      if (existing) return json({ error: 'Trip code already exists' }, 409, request);
+      const claimedAt = new Date().toISOString();
+      const statements = [
+        env.DB.prepare('INSERT INTO trips (id, name) VALUES (?, ?)').bind(id, name),
+        ...vehicleCodes.map((slotCode) => env.DB.prepare(
+          'INSERT INTO trip_slots (trip_id, slot_code, member_id, claimed_at) VALUES (?, ?, ?, ?)',
+        ).bind(id, slotCode, slotCode === leaderVehicleCode ? leaderMemberId : null, slotCode === leaderVehicleCode ? claimedAt : null)),
+        env.DB.prepare('INSERT INTO trip_members (trip_id, member_id, display_name) VALUES (?, ?, ?)').bind(id, leaderMemberId, leaderVehicleCode),
+      ];
+      await env.DB.batch(statements);
       return json({ id, name, status: 'active' }, 201, request);
     }
 
-    const tripMatch = url.pathname.match(/^\/api\/trips\/([0-9a-f-]{36})(?:\/members)?$/i);
+    const tripMatch = url.pathname.match(/^\/api\/trips\/([A-Za-z0-9_-]{4,64})(?:\/members)?$/);
     if (tripMatch && url.pathname === `/api/trips/${tripMatch[1]}` && request.method === 'GET') {
       const trip = await env.DB.prepare('SELECT id, name, status, created_at FROM trips WHERE id = ?').bind(tripMatch[1]).first();
-      return trip ? json(trip, 200, request) : json({ error: 'Trip not found' }, 404, request);
+      if (!trip) return json({ error: 'Trip not found' }, 404, request);
+      const slots = await env.DB.prepare('SELECT slot_code, member_id FROM trip_slots WHERE trip_id = ? ORDER BY rowid ASC')
+        .bind(tripMatch[1])
+        .all<{ slot_code: string; member_id: string | null }>();
+      return json({ ...trip, slots: slots.results.map((slot) => ({ code: slot.slot_code, memberId: slot.member_id, claimed: Boolean(slot.member_id) })) }, 200, request);
     }
 
     if (tripMatch && url.pathname.endsWith('/members') && request.method === 'GET') {
@@ -114,17 +136,30 @@ export default {
     if (tripMatch && url.pathname.endsWith('/members') && request.method === 'POST') {
       const body = await readJson(request);
       const memberId = typeof body?.memberId === 'string' ? body.memberId.trim().slice(0, 80) : '';
-      const displayName = typeof body?.displayName === 'string' ? body.displayName.trim().slice(0, 40) : '';
-      if (!memberId || !displayName) return json({ error: 'Vehicle name is required' }, 400, request);
+      const slotCode = typeof body?.slotCode === 'string' ? normalizeVehicleCode(body.slotCode) : '';
+      if (!memberId || !slotCode) return json({ error: 'Vehicle code is required' }, 400, request);
       const trip = await env.DB.prepare('SELECT id FROM trips WHERE id = ?').bind(tripMatch[1]).first();
       if (!trip) return json({ error: 'Trip not found' }, 404, request);
+      const slot = await env.DB.prepare('SELECT member_id FROM trip_slots WHERE trip_id = ? AND slot_code = ?')
+        .bind(tripMatch[1], slotCode)
+        .first<{ member_id: string | null }>();
+      if (!slot) return json({ error: 'Vehicle code not found' }, 404, request);
+      if (slot.member_id && slot.member_id !== memberId) return json({ error: 'Vehicle code already taken' }, 409, request);
+      const otherSlot = await env.DB.prepare('SELECT slot_code FROM trip_slots WHERE trip_id = ? AND member_id = ? AND slot_code <> ?')
+        .bind(tripMatch[1], memberId, slotCode)
+        .first();
+      if (otherSlot) return json({ error: 'This device already selected another vehicle' }, 409, request);
+      const claim = await env.DB.prepare(
+        'UPDATE trip_slots SET member_id = ?, claimed_at = ? WHERE trip_id = ? AND slot_code = ? AND (member_id IS NULL OR member_id = ?)',
+      ).bind(memberId, new Date().toISOString(), tripMatch[1], slotCode, memberId).run();
+      if (!claim.meta.changes) return json({ error: 'Vehicle code already taken' }, 409, request);
       await env.DB.prepare(
         'INSERT INTO trip_members (trip_id, member_id, display_name) VALUES (?, ?, ?) ON CONFLICT(trip_id, member_id) DO UPDATE SET display_name = excluded.display_name',
-      ).bind(tripMatch[1], memberId, displayName).run();
-      return json({ memberId, displayName }, 201, request);
+      ).bind(tripMatch[1], memberId, slotCode).run();
+      return json({ memberId, displayName: slotCode, slotCode }, 201, request);
     }
 
-    const socketMatch = url.pathname.match(/^\/ws\/([0-9a-f-]{36})$/i);
+    const socketMatch = url.pathname.match(/^\/ws\/([A-Za-z0-9_-]{4,64})$/);
     if (socketMatch && request.headers.get('Upgrade')?.toLowerCase() === 'websocket') {
       const id = env.TRIP_ROOM.idFromName(socketMatch[1]);
       return env.TRIP_ROOM.get(id).fetch(request);
@@ -146,6 +181,32 @@ function corsHeaders(request?: Request): HeadersInit {
     'access-control-allow-origin': APP_ORIGINS.has(requestOrigin) ? requestOrigin : 'https://weemap.vercel.app',
     'vary': 'Origin',
   };
+}
+
+const UUID_CODE = /^[0-9a-f-]{36}$/i;
+const CUSTOM_CODE = /^[A-Z0-9_-]{4,32}$/;
+const VEHICLE_CODE = /^[A-Z0-9_-]{1,20}$/;
+const MAX_VEHICLES = 20;
+
+function normalizeTripCode(value: string): string {
+  const trimmed = value.trim();
+  return UUID_CODE.test(trimmed) ? trimmed.toLowerCase() : trimmed.toUpperCase();
+}
+
+function isValidTripCode(value: string): boolean {
+  const normalized = normalizeTripCode(value);
+  return UUID_CODE.test(normalized) || CUSTOM_CODE.test(normalized);
+}
+
+function normalizeVehicleCode(value: string): string {
+  return value.trim().toUpperCase();
+}
+
+function normalizeVehicleCodes(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const codes = value.filter((code): code is string => typeof code === 'string').map(normalizeVehicleCode);
+  if (codes.length !== new Set(codes).size || codes.some((code) => !VEHICLE_CODE.test(code))) return [];
+  return codes;
 }
 
 async function readJson(request: Request): Promise<Record<string, unknown> | null> {
