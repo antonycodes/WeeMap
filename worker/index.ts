@@ -1,3 +1,8 @@
+import { calculateRouteMatrix, routesFromMatrix, type RouteMatrix } from './routing';
+import { isLiveLocationStale } from '../src/lib/liveLocation';
+
+interface RoutingEnv extends Env { ORS_API_KEY?: string }
+
 type LocationMessage = {
   type: 'location';
   memberId: string;
@@ -9,7 +14,7 @@ type LocationMessage = {
   recordedAt: string;
 };
 
-async function hashLeaderPassword(password: string, salt: Uint8Array): Promise<string> {
+async function hashLeaderPassword(password: string, salt: Uint8Array<ArrayBuffer>): Promise<string> {
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
   const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: 100_000 }, key, 256);
   return [...new Uint8Array(bits)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -34,44 +39,61 @@ const APP_ORIGINS = new Set(['https://weemap.antony.codes', 'https://weemap.verc
 
 export class TripRoom implements DurableObject {
   private readonly ctx: DurableObjectState;
-  private readonly env: Env;
+  private readonly env: RoutingEnv;
+  private pendingRoutes?: Promise<RouteMatrix>;
 
-  constructor(ctx: DurableObjectState, env: Env) {
+  constructor(ctx: DurableObjectState, env: RoutingEnv) {
     this.ctx = ctx;
     this.env = env;
   }
 
   async fetch(request: Request): Promise<Response> {
+    if (request.method === 'POST' && new URL(request.url).pathname.endsWith('/routes')) return this.routeEstimates(request);
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
       return json({ error: 'WebSocket required' }, 426);
     }
 
-    // shortcut: query trip history on connect; add a latest-location table if the event log grows.
-    const locations = await this.env.DB.prepare(
-      `SELECT e.member_id, m.display_name, e.latitude, e.longitude, e.accuracy, e.speed_kmh, e.recorded_at
-       FROM location_events AS e
-       JOIN (
-         SELECT member_id, MAX(id) AS id FROM location_events WHERE trip_id = ? GROUP BY member_id
-       ) AS latest ON latest.id = e.id
-       JOIN trip_members AS m ON m.trip_id = e.trip_id AND m.member_id = e.member_id
-       WHERE e.trip_id = ?`,
-    ).bind(this.ctx.id.name ?? 'unknown', this.ctx.id.name ?? 'unknown')
-      .all<{ member_id: string; display_name: string; latitude: number; longitude: number; accuracy: number | null; speed_kmh: number | null; recorded_at: string }>();
+    const locations = await loadTripLocations(this.env, this.ctx.id.name ?? 'unknown');
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1]);
-    for (const row of locations.results) {
-      pair[1].send(JSON.stringify({
-        type: 'location',
-        memberId: row.member_id,
-        displayName: row.display_name,
-        latitude: row.latitude,
-        longitude: row.longitude,
-        ...(row.accuracy === null ? {} : { accuracy: row.accuracy }),
-        ...(row.speed_kmh === null ? {} : { speedKmh: row.speed_kmh }),
-        recordedAt: row.recorded_at,
-      }));
-    }
+    for (const location of locations) pair[1].send(JSON.stringify(location));
     return new Response(null, { status: 101, webSocket: pair[0] });
+  }
+
+  private async routeEstimates(request: Request): Promise<Response> {
+    const body = await readJson(request);
+    const memberId = typeof body?.memberId === 'string' ? body.memberId : '';
+    const memberToken = typeof body?.memberToken === 'string' ? body.memberToken : '';
+    if (!memberId || memberId.length > 80 || !memberToken || memberToken.length > 128) return json({ error: 'Member authorization required' }, 403, request);
+    const tripId = this.ctx.id.name ?? 'unknown';
+    const member = await this.env.DB.prepare('SELECT member_token FROM trip_members WHERE trip_id = ? AND member_id = ?')
+      .bind(tripId, memberId).first<{ member_token: string | null }>();
+    if (!member?.member_token || !equalHash(member.member_token, memberToken)) return json({ error: 'Member authorization required' }, 403, request);
+    const apiKey = this.env.ORS_API_KEY;
+    if (!apiKey) return json({ error: 'Routing is not configured' }, 503, request);
+    const locations = (await loadTripLocations(this.env, tripId)).filter((location) => !isLiveLocationStale(location.recordedAt));
+    if (!locations.some((location) => location.memberId === memberId)) return json({ error: 'Fresh GPS required' }, 409, request);
+    if (locations.length < 2) return json({ calculatedAt: Date.now(), routes: [] }, 200, request);
+    if (locations.length > MAX_VEHICLES) return json({ error: 'Too many vehicles' }, 400, request);
+    try {
+      let matrix = await this.ctx.storage.get<RouteMatrix>('routeMatrix');
+      if (!matrix || Date.now() - matrix.calculatedAt >= 60_000) {
+        if (!this.pendingRoutes) {
+          this.pendingRoutes = (async () => {
+            const lastAttempt = await this.ctx.storage.get<number>('routeAttemptAt');
+            if (lastAttempt !== undefined && Date.now() - lastAttempt < 60_000) throw new Error('Routing retry cooldown');
+            await this.ctx.storage.put('routeAttemptAt', Date.now());
+            const result = await calculateRouteMatrix(apiKey, locations);
+            await this.ctx.storage.put('routeMatrix', result);
+            return result;
+          })().finally(() => { this.pendingRoutes = undefined; });
+        }
+        matrix = await this.pendingRoutes;
+      }
+      return json({ calculatedAt: matrix.calculatedAt, routes: routesFromMatrix(matrix, memberId, new Set(locations.map((location) => location.memberId))) }, 200, request);
+    } catch {
+      return json({ error: 'Routing temporarily unavailable' }, 503, request);
+    }
   }
 
   async webSocketMessage(_socket: WebSocket, message: string | ArrayBuffer): Promise<void> {
@@ -89,7 +111,6 @@ export class TripRoom implements DurableObject {
       .first<{ display_name: string }>();
     if (!member) return;
     const location = { ...parsed, displayName: member.display_name };
-
     await this.env.DB.prepare(
       'INSERT INTO location_events (trip_id, member_id, latitude, longitude, accuracy, speed_kmh, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
     ).bind(
@@ -101,7 +122,6 @@ export class TripRoom implements DurableObject {
       location.speedKmh ?? null,
       location.recordedAt,
     ).run();
-
     const payload = JSON.stringify(location);
     for (const client of this.ctx.getWebSockets()) {
       try {
@@ -122,7 +142,7 @@ export class TripRoom implements DurableObject {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: RoutingEnv): Promise<Response> {
     const url = new URL(request.url);
 
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders(request) });
@@ -161,7 +181,11 @@ export default {
       return json({ id, name, status: 'active', memberToken }, 201, request);
     }
 
-    const tripMatch = url.pathname.match(/^\/api\/trips\/([A-Za-z0-9_-]{4,64})(?:\/(members|leader))?$/);
+    const tripMatch = url.pathname.match(/^\/api\/trips\/([A-Za-z0-9_-]{4,64})(?:\/(members|leader|routes))?$/);
+    if (tripMatch && url.pathname.endsWith('/routes') && request.method === 'POST') {
+      return env.TRIP_ROOM.get(env.TRIP_ROOM.idFromName(tripMatch[1])).fetch(request);
+    }
+
     if (tripMatch && url.pathname === `/api/trips/${tripMatch[1]}` && request.method === 'GET') {
       const trip = await env.DB.prepare('SELECT id, name, status, created_at, leader_password_hash IS NOT NULL AS has_leader_password FROM trips WHERE id = ?').bind(tripMatch[1]).first();
       if (!trip) return json({ error: 'Trip not found' }, 404, request);
@@ -355,4 +379,19 @@ function isLocationMessage(value: unknown): value is LocationMessage {
     && item.recordedAt.length <= 40
     && (item.accuracy === undefined || (typeof item.accuracy === 'number' && Number.isFinite(item.accuracy) && item.accuracy >= 0))
     && (item.speedKmh === undefined || (typeof item.speedKmh === 'number' && Number.isFinite(item.speedKmh) && item.speedKmh >= 0));
+}
+
+async function loadTripLocations(env: RoutingEnv, tripId: string): Promise<LocationMessage[]> {
+    // shortcut: query trip history on connect; add a latest-location table if the event log grows.
+    const locations = await env.DB.prepare(
+      `SELECT e.member_id, m.display_name, e.latitude, e.longitude, e.accuracy, e.speed_kmh, e.recorded_at
+       FROM location_events AS e
+       JOIN (
+         SELECT member_id, MAX(id) AS id FROM location_events WHERE trip_id = ? GROUP BY member_id
+       ) AS latest ON latest.id = e.id
+       JOIN trip_members AS m ON m.trip_id = e.trip_id AND m.member_id = e.member_id
+       WHERE e.trip_id = ?`,
+    ).bind(tripId, tripId)
+      .all<{ member_id: string; display_name: string; latitude: number; longitude: number; accuracy: number | null; speed_kmh: number | null; recorded_at: string }>();
+    return locations.results.map((row) => ({ type: 'location', memberId: row.member_id, displayName: row.display_name, latitude: row.latitude, longitude: row.longitude, accuracy: row.accuracy ?? undefined, speedKmh: row.speed_kmh ?? undefined, recordedAt: row.recorded_at }));
 }

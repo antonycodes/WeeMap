@@ -9,3 +9,6 @@ worker-configuration.d.ts
 .impeccable
 .vercel
 .env*
+.dev.vars
+.dev.vars.*
+!.dev.vars.example

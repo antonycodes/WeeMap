@@ -40,7 +40,15 @@ npx wrangler d1 execute group-navigation-local --local --file=db/schema.sql
 npm run cf:dev
 ```
 
-`wrangler.jsonc` đang dùng database ID placeholder. Không deploy file này. Tạo D1 thật và thay ID chỉ sau khi có quyết định triển khai.
+`wrangler.jsonc` đang trỏ tới Worker và D1 đang triển khai. Kiểm tra tài khoản Cloudflare và binding trước khi chạy lệnh ghi dữ liệu remote.
+
+## Khoảng cách theo đường đi
+
+Tạo `.dev.vars` từ `.dev.vars.example`, rồi điền `ORS_API_KEY` của openrouteservice. File chứa khóa được bỏ qua bởi Git. Trên production, lưu khóa bằng `npx wrangler secret put ORS_API_KEY`; không dùng biến `VITE_` cho khóa này.
+
+Worker tính khoảng cách và thời gian theo tuyến ô tô giữa các xe có GPS cập nhật trong 45 giây gần nhất. Một ma trận được dùng chung cho cả đoàn trong 60 giây, kể cả khi Durable Object khởi động lại. Client kiểm tra kết quả mỗi 30 giây khi app đang mở. API yêu cầu token thành viên hợp lệ.
+
+Thời gian là ước tính theo tuyến ô tô, chưa tính giao thông trực tiếp. Khi GPS cũ, hết hạn mức hoặc không tìm được đường, app không hiển thị thời gian; khoảng cách đường thẳng được ghi rõ nếu còn GPS mới. API key gói miễn phí vẫn chịu hạn mức chung của openrouteservice cho mọi chuyến.
 
 ## Giới hạn PoC
 
