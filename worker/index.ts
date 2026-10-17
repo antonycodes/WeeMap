@@ -8,6 +8,8 @@ type LocationMessage = {
   recordedAt: string;
 };
 
+const APP_ORIGIN = 'https://weemap.vercel.app';
+
 export class TripRoom implements DurableObject {
   private readonly ctx: DurableObjectState;
   private readonly env: Env;
@@ -77,6 +79,8 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
+    if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders() });
+
     if (url.pathname === '/api/health') return json({ ok: true, phase: 0 });
 
     if (url.pathname === '/api/trips' && request.method === 'POST') {
@@ -105,7 +109,15 @@ export default {
 } satisfies ExportedHandler<Env>;
 
 function json(value: unknown, status = 200): Response {
-  return new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json; charset=utf-8' } });
+  return new Response(JSON.stringify(value), { status, headers: { ...corsHeaders(), 'content-type': 'application/json; charset=utf-8' } });
+}
+
+function corsHeaders(): HeadersInit {
+  return {
+    'access-control-allow-headers': 'content-type',
+    'access-control-allow-methods': 'GET, POST, OPTIONS',
+    'access-control-allow-origin': APP_ORIGIN,
+  };
 }
 
 async function readJson(request: Request): Promise<Record<string, unknown> | null> {
