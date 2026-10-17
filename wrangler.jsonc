@@ -1,0 +1,28 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "group-navigation-local",
+  "main": "worker/index.ts",
+  "compatibility_date": "2026-10-17",
+  "compatibility_flags": ["nodejs_compat"],
+  "upload_source_maps": true,
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "TRIP_ROOM", "class_name": "TripRoom" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TripRoom"] }],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "group-navigation-local",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "preview_database_id": "local"
+    }
+  ]
+}
