@@ -71,6 +71,10 @@ export default function App() {
   const shareUrl = tripId ? `${window.location.origin}${window.location.pathname}?trip=${encodeURIComponent(tripId)}` : '';
 
   const currentSpeed = useMemo(() => speedFromMetersPerSecond(position?.speed ?? null), [position]);
+  const latestPosition = useRef(position);
+  const latestSpeed = useRef(currentSpeed);
+  latestPosition.current = position;
+  latestSpeed.current = currentSpeed;
   const directionsUrl = position && destination.trim()
     ? `https://www.google.com/maps/dir/?api=1&origin=${position.latitude},${position.longitude}&destination=${encodeURIComponent(destination.trim())}&travelmode=driving`
     : undefined;
@@ -468,29 +472,45 @@ export default function App() {
   useEffect(() => {
     if (!tripId || !memberReady) return;
     const socketOrigin = workerOrigin.replace(/^http/, 'ws');
-    const nextSocket = new WebSocket(`${socketOrigin}/ws/${tripId}`);
-    socket.current = nextSocket;
-    nextSocket.addEventListener('open', () => {
-      setServerState('ok');
-      if (position) sendPosition(nextSocket, memberId, selectedVehicleCode, position, currentSpeed);
-    });
-    nextSocket.addEventListener('message', (event) => {
-      try {
-        const location = parseLiveLocation(JSON.parse(event.data) as unknown);
-        if (location) {
-          setMembers((previous) => ({ ...previous, [location.memberId]: location }));
-          setRoster((previous) => previous.some((member) => member.memberId === location.memberId)
-            ? previous.map((member) => member.memberId === location.memberId && location.displayName ? { ...member, displayName: location.displayName } : member)
-            : [...previous, { memberId: location.memberId, displayName: location.displayName ?? `Xe ${location.memberId.slice(0, 4)}` }]);
-          getVehicleColor(location.memberId);
+    let active = true;
+    let reconnectTimer: number | undefined;
+    let reconnectAttempt = 0;
+    const connect = () => {
+      const nextSocket = new WebSocket(`${socketOrigin}/ws/${tripId}`);
+      socket.current = nextSocket;
+      nextSocket.addEventListener('open', () => {
+        if (!active) return;
+        reconnectAttempt = 0;
+        setServerState('ok');
+        const position = latestPosition.current;
+        if (position) sendPosition(nextSocket, memberId, selectedVehicleCode, position, latestSpeed.current);
+      });
+      nextSocket.addEventListener('message', (event) => {
+        try {
+          const location = parseLiveLocation(JSON.parse(event.data) as unknown);
+          if (location) {
+            setMembers((previous) => ({ ...previous, [location.memberId]: location }));
+            setRoster((previous) => previous.some((member) => member.memberId === location.memberId)
+              ? previous.map((member) => member.memberId === location.memberId && location.displayName ? { ...member, displayName: location.displayName } : member)
+              : [...previous, { memberId: location.memberId, displayName: location.displayName ?? `Xe ${location.memberId.slice(0, 4)}` }]);
+            getVehicleColor(location.memberId);
+          }
+        } catch {
+          // Ignore malformed room messages.
         }
-      } catch {
-        // Ignore malformed room messages.
-      }
-    });
-    nextSocket.addEventListener('error', () => setServerState('blocked'));
+      });
+      nextSocket.addEventListener('error', () => setServerState('blocked'));
+      nextSocket.addEventListener('close', () => {
+        if (!active) return;
+        setServerState('pending');
+        reconnectTimer = window.setTimeout(connect, Math.min(1000 * 2 ** Math.min(reconnectAttempt++, 4), 15_000));
+      });
+    };
+    connect();
     return () => {
-      nextSocket.close();
+      active = false;
+      if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
+      socket.current?.close();
       socket.current = null;
     };
   }, [memberReady, selectedVehicleCode, tripId]);
