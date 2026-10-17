@@ -625,8 +625,6 @@ export default function App() {
         {panelOpen && <div className="map-sheet" role="dialog" aria-label="Thiết lập chuyến đi">
           <div className="sheet-heading"><div><span className="eyebrow">CHUYẾN ĐI</span><h1>{tripId ? tripInfo?.name ?? 'Đoàn xe đang chạy' : 'Bản đồ của bạn'}</h1></div><span className={`connection-pill connection-${serverState}`}>{serverState === 'ok' ? 'Trực tuyến' : 'PoC'}</span></div>
           <div className="driving-row">
-            <div><span className="metric-label">Tốc độ hiện tại</span><strong>{currentSpeed ?? '—'} <small>km/h</small></strong></div>
-            <div className="driving-divider" />
             <div><span className="metric-label">Xe trong đoàn</span><strong>{Object.keys(displayedMembers).length} <small>xe</small></strong></div>
             {position && <span className="last-seen">{new Date(position.timestamp).toLocaleTimeString('vi-VN')}</span>}
           </div>
