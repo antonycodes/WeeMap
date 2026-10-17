@@ -8,7 +8,7 @@ type LocationMessage = {
   recordedAt: string;
 };
 
-const APP_ORIGIN = 'https://weemap.vercel.app';
+const APP_ORIGINS = new Set(['https://weemap.antony.codes', 'https://weemap.vercel.app']);
 
 export class TripRoom implements DurableObject {
   private readonly ctx: DurableObjectState;
@@ -79,23 +79,23 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
-    if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders() });
+    if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders(request) });
 
-    if (url.pathname === '/api/health') return json({ ok: true, phase: 0 });
+    if (url.pathname === '/api/health') return json({ ok: true, phase: 0 }, 200, request);
 
     if (url.pathname === '/api/trips' && request.method === 'POST') {
       const body = await readJson(request);
       const name = typeof body?.name === 'string' ? body.name.trim().slice(0, 80) : '';
-      if (!name) return json({ error: 'Trip name is required' }, 400);
+      if (!name) return json({ error: 'Trip name is required' }, 400, request);
       const id = crypto.randomUUID();
       await env.DB.prepare('INSERT INTO trips (id, name) VALUES (?, ?)').bind(id, name).run();
-      return json({ id, name, status: 'active' }, 201);
+      return json({ id, name, status: 'active' }, 201, request);
     }
 
     const tripMatch = url.pathname.match(/^\/api\/trips\/([0-9a-f-]{36})$/i);
     if (tripMatch && request.method === 'GET') {
       const trip = await env.DB.prepare('SELECT id, name, status, created_at FROM trips WHERE id = ?').bind(tripMatch[1]).first();
-      return trip ? json(trip) : json({ error: 'Trip not found' }, 404);
+      return trip ? json(trip, 200, request) : json({ error: 'Trip not found' }, 404, request);
     }
 
     const socketMatch = url.pathname.match(/^\/ws\/([0-9a-f-]{36})$/i);
@@ -108,15 +108,17 @@ export default {
   },
 } satisfies ExportedHandler<Env>;
 
-function json(value: unknown, status = 200): Response {
-  return new Response(JSON.stringify(value), { status, headers: { ...corsHeaders(), 'content-type': 'application/json; charset=utf-8' } });
+function json(value: unknown, status = 200, request?: Request): Response {
+  return new Response(JSON.stringify(value), { status, headers: { ...corsHeaders(request), 'content-type': 'application/json; charset=utf-8' } });
 }
 
-function corsHeaders(): HeadersInit {
+function corsHeaders(request?: Request): HeadersInit {
+  const requestOrigin = request?.headers.get('Origin') ?? '';
   return {
     'access-control-allow-headers': 'content-type',
     'access-control-allow-methods': 'GET, POST, OPTIONS',
-    'access-control-allow-origin': APP_ORIGIN,
+    'access-control-allow-origin': APP_ORIGINS.has(requestOrigin) ? requestOrigin : 'https://weemap.vercel.app',
+    'vary': 'Origin',
   };
 }
 
