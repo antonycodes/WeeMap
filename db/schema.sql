@@ -1,6 +1,8 @@
 CREATE TABLE IF NOT EXISTS trips (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
+  leader_password_salt TEXT,
+  leader_password_hash TEXT,
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'ended')),
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -9,6 +11,7 @@ CREATE TABLE IF NOT EXISTS trip_members (
   trip_id TEXT NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
   member_id TEXT NOT NULL,
   display_name TEXT NOT NULL,
+  member_token TEXT,
   joined_at TEXT NOT NULL DEFAULT (datetime('now')),
   PRIMARY KEY (trip_id, member_id)
 );
