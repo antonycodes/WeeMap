@@ -228,14 +228,14 @@ export default {
       const requesterMemberId = typeof body?.requesterMemberId === 'string' ? body.requesterMemberId.trim().slice(0, 80) : '';
       const targetMemberId = typeof body?.targetMemberId === 'string' ? body.targetMemberId.trim().slice(0, 80) : '';
       const requesterToken = typeof body?.requesterToken === 'string' ? body.requesterToken : '';
+      const password = typeof body?.leaderPassword === 'string' ? body.leaderPassword : '';
       if (!requesterMemberId || !targetMemberId) return json({ error: 'Member id is required' }, 400, request);
-      if (requesterMemberId === targetMemberId) {
+      if (requesterMemberId === targetMemberId && !password) {
         const member = await env.DB.prepare('SELECT member_token FROM trip_members WHERE trip_id = ? AND member_id = ?')
           .bind(tripMatch[1], targetMemberId)
           .first<{ member_token: string | null }>();
         if (member?.member_token && requesterToken !== member.member_token) return json({ error: 'This device session is no longer authorized' }, 403, request);
       } else {
-        const password = typeof body?.leaderPassword === 'string' ? body.leaderPassword : '';
         const trip = await env.DB.prepare('SELECT leader_password_salt, leader_password_hash FROM trips WHERE id = ?')
           .bind(tripMatch[1])
           .first<{ leader_password_salt: string | null; leader_password_hash: string | null }>();

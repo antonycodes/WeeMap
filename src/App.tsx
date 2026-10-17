@@ -226,7 +226,7 @@ export default function App() {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ requesterMemberId: memberId, targetMemberId: memberId, requesterToken: localStorage.getItem(`weemap-member-token:${tripId}`) }),
       });
-      if (!response.ok) throw new Error('Không thể thoát đoàn.');
+      if (!response.ok && response.status !== 403) throw new Error('Không thể thoát đoàn.');
       localStorage.removeItem(`weemap-vehicle:${tripId}`);
       localStorage.removeItem(`weemap-member-token:${tripId}`);
       window.location.assign(window.location.pathname);
@@ -260,7 +260,7 @@ export default function App() {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ requesterMemberId: memberId, targetMemberId, leaderPassword }),
       });
-      if (!response.ok) throw new Error('Không xóa được xe khỏi đoàn.');
+      if (!response.ok) throw new Error(response.status === 403 ? 'Mật khẩu trưởng đoàn không đúng. Hãy mở quyền lại.' : response.status === 409 ? 'Đoàn này chưa có mật khẩu trưởng đoàn.' : 'Không xóa được xe khỏi đoàn.');
       setRoster((previous) => previous.filter((member) => member.memberId !== targetMemberId));
       setTripSlots((previous) => previous.map((slot) => slot.memberId === targetMemberId ? { ...slot, memberId: null, claimed: false } : slot));
       if (targetMemberId === memberId) {
@@ -453,6 +453,35 @@ export default function App() {
       controller.abort();
     };
   }, [tripId]);
+
+  useEffect(() => {
+    if (!tripId) return;
+    const controller = new AbortController();
+    let timer: number | undefined;
+    const refreshRoster = async () => {
+      try {
+        const [tripResponse, membersResponse] = await Promise.all([
+          fetch(`${workerOrigin}/api/trips/${tripId}`, { signal: controller.signal, cache: 'no-store' }),
+          fetch(`${workerOrigin}/api/trips/${tripId}/members`, { signal: controller.signal, cache: 'no-store' }),
+        ]);
+        if (!tripResponse.ok || !membersResponse.ok) throw new Error('Không tải được danh sách xe.');
+        const trip = await tripResponse.json() as TripInfo;
+        const data = await membersResponse.json() as { members: Array<{ member_id: string; display_name: string; joined_at?: string }> };
+        if (controller.signal.aborted) return;
+        setTripSlots(trip.slots ?? []);
+        setRoster(data.members.map((member) => ({ memberId: member.member_id, displayName: member.display_name, joinedAt: member.joined_at })));
+      } catch {
+        // Retain the last roster while the connection recovers.
+      } finally {
+        if (!controller.signal.aborted) timer = window.setTimeout(() => void refreshRoster(), 5000);
+      }
+    };
+    void refreshRoster();
+    return () => {
+      controller.abort();
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [tripId, leaderUnlocked]);
 
   useEffect(() => {
     let cancelled = false;
