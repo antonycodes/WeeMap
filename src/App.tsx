@@ -8,6 +8,9 @@ import { parseLiveLocation, type LiveLocation } from './lib/liveLocation';
 type CheckState = 'ok' | 'pending' | 'blocked';
 type Position = { latitude: number; longitude: number; accuracy: number; speed: number | null; timestamp: number };
 
+const workerOrigin = (import.meta.env.VITE_WORKER_ORIGIN
+  ?? (import.meta.env.DEV ? window.location.origin : 'https://group-navigation-local.eventnpi2026.workers.dev')).replace(/\/$/, '');
+
 function isStandalone(): boolean {
   return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
 }
@@ -60,7 +63,7 @@ export default function App() {
     setTripBusy(true);
     setTripError(null);
     try {
-      const response = await fetch('/api/trips', {
+      const response = await fetch(`${workerOrigin}/api/trips`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: tripName.trim() || 'Chuyến đi mới' }),
@@ -84,7 +87,7 @@ export default function App() {
     setTripBusy(true);
     setTripError(null);
     try {
-      const response = await fetch(`/api/trips/${id}`);
+      const response = await fetch(`${workerOrigin}/api/trips/${id}`);
       if (!response.ok) throw new Error('Không tìm thấy chuyến đi.');
       window.location.assign(`${window.location.pathname}?trip=${encodeURIComponent(id)}`);
     } catch (nextError) {
@@ -173,7 +176,7 @@ export default function App() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/health')
+    fetch(`${workerOrigin}/api/health`)
       .then((response) => {
         if (!response.ok) throw new Error('server');
         if (!cancelled) setServerState('ok');
@@ -188,8 +191,8 @@ export default function App() {
 
   useEffect(() => {
     if (!tripId) return;
-    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const nextSocket = new WebSocket(`${protocol}://${window.location.host}/ws/${tripId}`);
+    const socketOrigin = workerOrigin.replace(/^http/, 'ws');
+    const nextSocket = new WebSocket(`${socketOrigin}/ws/${tripId}`);
     socket.current = nextSocket;
     nextSocket.addEventListener('open', () => {
       setServerState('ok');
