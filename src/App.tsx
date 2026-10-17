@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { getLatestCommit, hasNewerCommit, type BuildInfo } from './lib/appUpdate';
 import { DEFAULT_SPEED_LIMIT, isOverSpeedLimit, speedFromMetersPerSecond } from './lib/drivingAssistant';
 import { loadGoogleMaps } from './lib/googleMaps';
 
@@ -18,6 +19,7 @@ export default function App() {
   const [gpsState, setGpsState] = useState<CheckState>('pending');
   const [wakeState, setWakeState] = useState<CheckState>('pending');
   const [serverState, setServerState] = useState<CheckState>('pending');
+  const [updateAvailable, setUpdateAvailable] = useState(false);
   const [position, setPosition] = useState<Position | null>(null);
   const [speedLimit, setSpeedLimit] = useState(DEFAULT_SPEED_LIMIT);
   const [error, setError] = useState<string | null>(null);
@@ -76,6 +78,32 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const controller = new AbortController();
+    let timer: number | undefined;
+
+    const checkForUpdate = async () => {
+      try {
+        const [buildResponse, latestCommit] = await Promise.all([
+          fetch('/build-info.json', { cache: 'no-store', signal: controller.signal }),
+          getLatestCommit(controller.signal),
+        ]);
+        if (!buildResponse.ok) throw new Error('build-info');
+        const buildInfo = (await buildResponse.json()) as BuildInfo;
+        if (hasNewerCommit(buildInfo, latestCommit)) setUpdateAvailable(true);
+      } catch {
+        // Update checks are optional. GPS and navigation must keep working offline.
+      }
+      timer = window.setTimeout(() => void checkForUpdate(), 10 * 60 * 1000);
+    };
+
+    void checkForUpdate();
+    return () => {
+      controller.abort();
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     fetch('/api/health')
       .then((response) => {
@@ -125,6 +153,12 @@ export default function App() {
 
   return (
     <main className="shell">
+      {updateAvailable && (
+        <div className="update-banner" role="status">
+          <span>Có bản cập nhật mới từ GitHub.</span>
+          <button type="button" onClick={() => window.location.reload()}>Tải lại</button>
+        </div>
+      )}
       <header className="topbar">
         <div><p className="eyebrow">PHASE 0 · PRIVATE BETA</p><h1>Group Navigation</h1></div>
         <span className="pill">LOCAL ONLY</span>
