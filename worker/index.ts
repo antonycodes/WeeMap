@@ -9,6 +9,27 @@ type LocationMessage = {
   recordedAt: string;
 };
 
+async function hashLeaderPassword(password: string, salt: Uint8Array): Promise<string> {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: 100_000 }, key, 256);
+  return [...new Uint8Array(bits)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function hex(bytes: Uint8Array): string {
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+function newMemberToken(): string {
+  return hex(crypto.getRandomValues(new Uint8Array(32)));
+}
+
+function equalHash(left: string, right: string): boolean {
+  if (left.length !== right.length) return false;
+  let difference = 0;
+  for (let index = 0; index < left.length; index++) difference |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  return difference === 0;
+}
+
 const APP_ORIGINS = new Set(['https://weemap.antony.codes', 'https://weemap.vercel.app']);
 
 export class TripRoom implements DurableObject {
@@ -96,8 +117,10 @@ export default {
       const vehicleCodes = normalizeVehicleCodes(body?.vehicleCodes);
       const leaderMemberId = typeof body?.memberId === 'string' ? body.memberId.trim().slice(0, 80) : '';
       const leaderVehicleCode = typeof body?.vehicleCode === 'string' ? normalizeVehicleCode(body.vehicleCode) : '';
+      const leaderPassword = typeof body?.leaderPassword === 'string' ? body.leaderPassword : '';
       if (!name) return json({ error: 'Trip name is required' }, 400, request);
       if (requestedCode && !isValidTripCode(requestedCode)) return json({ error: 'Trip code must use 4-32 letters, numbers, hyphens, or underscores' }, 400, request);
+      if (leaderPassword.length < 8 || leaderPassword.length > 64) return json({ error: 'Leader password must be 8-64 characters' }, 400, request);
       if (!leaderMemberId || !leaderVehicleCode || !vehicleCodes.length || vehicleCodes.length > MAX_VEHICLES || !vehicleCodes.includes(leaderVehicleCode)) {
         return json({ error: 'Vehicle slots are required' }, 400, request);
       }
@@ -105,20 +128,23 @@ export default {
       const existing = await env.DB.prepare('SELECT id FROM trips WHERE id = ?').bind(id).first();
       if (existing) return json({ error: 'Trip code already exists' }, 409, request);
       const claimedAt = new Date().toISOString();
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      const passwordHash = await hashLeaderPassword(leaderPassword, salt);
+      const memberToken = newMemberToken();
       const statements = [
-        env.DB.prepare('INSERT INTO trips (id, name) VALUES (?, ?)').bind(id, name),
+        env.DB.prepare('INSERT INTO trips (id, name, leader_password_salt, leader_password_hash) VALUES (?, ?, ?, ?)').bind(id, name, hex(salt), passwordHash),
         ...vehicleCodes.map((slotCode) => env.DB.prepare(
           'INSERT INTO trip_slots (trip_id, slot_code, member_id, claimed_at) VALUES (?, ?, ?, ?)',
         ).bind(id, slotCode, slotCode === leaderVehicleCode ? leaderMemberId : null, slotCode === leaderVehicleCode ? claimedAt : null)),
-        env.DB.prepare('INSERT INTO trip_members (trip_id, member_id, display_name) VALUES (?, ?, ?)').bind(id, leaderMemberId, leaderVehicleCode),
+        env.DB.prepare('INSERT INTO trip_members (trip_id, member_id, display_name, member_token) VALUES (?, ?, ?, ?)').bind(id, leaderMemberId, leaderVehicleCode, memberToken),
       ];
       await env.DB.batch(statements);
-      return json({ id, name, status: 'active' }, 201, request);
+      return json({ id, name, status: 'active', memberToken }, 201, request);
     }
 
-    const tripMatch = url.pathname.match(/^\/api\/trips\/([A-Za-z0-9_-]{4,64})(?:\/members)?$/);
+    const tripMatch = url.pathname.match(/^\/api\/trips\/([A-Za-z0-9_-]{4,64})(?:\/(members|leader))?$/);
     if (tripMatch && url.pathname === `/api/trips/${tripMatch[1]}` && request.method === 'GET') {
-      const trip = await env.DB.prepare('SELECT id, name, status, created_at FROM trips WHERE id = ?').bind(tripMatch[1]).first();
+      const trip = await env.DB.prepare('SELECT id, name, status, created_at, leader_password_hash IS NOT NULL AS has_leader_password FROM trips WHERE id = ?').bind(tripMatch[1]).first();
       if (!trip) return json({ error: 'Trip not found' }, 404, request);
       const slots = await env.DB.prepare('SELECT slot_code, member_id FROM trip_slots WHERE trip_id = ? ORDER BY rowid ASC')
         .bind(tripMatch[1])
@@ -133,10 +159,24 @@ export default {
       return json({ members: members.results }, 200, request);
     }
 
+    if (tripMatch && url.pathname.endsWith('/leader') && request.method === 'POST') {
+      const body = await readJson(request);
+      const password = typeof body?.password === 'string' ? body.password : '';
+      const trip = await env.DB.prepare('SELECT leader_password_salt, leader_password_hash FROM trips WHERE id = ?')
+        .bind(tripMatch[1])
+        .first<{ leader_password_salt: string | null; leader_password_hash: string | null }>();
+      if (!trip) return json({ error: 'Trip not found' }, 404, request);
+      if (!trip.leader_password_salt || !trip.leader_password_hash) return json({ error: 'Leader password is not configured for this trip' }, 409, request);
+      const salt = Uint8Array.from(trip.leader_password_salt.match(/.{2}/g) ?? [], (byte) => Number.parseInt(byte, 16));
+      if (!equalHash(await hashLeaderPassword(password, salt), trip.leader_password_hash)) return json({ error: 'Invalid leader password' }, 403, request);
+      return json({ leader: true }, 200, request);
+    }
+
     if (tripMatch && url.pathname.endsWith('/members') && request.method === 'POST') {
       const body = await readJson(request);
       const memberId = typeof body?.memberId === 'string' ? body.memberId.trim().slice(0, 80) : '';
       const slotCode = typeof body?.slotCode === 'string' ? normalizeVehicleCode(body.slotCode) : '';
+      const suppliedToken = typeof body?.memberToken === 'string' ? body.memberToken : '';
       if (!memberId || !slotCode) return json({ error: 'Vehicle code is required' }, 400, request);
       const trip = await env.DB.prepare('SELECT id FROM trips WHERE id = ?').bind(tripMatch[1]).first();
       if (!trip) return json({ error: 'Trip not found' }, 404, request);
@@ -149,23 +189,45 @@ export default {
         .bind(tripMatch[1], memberId, slotCode)
         .first();
       if (otherSlot) return json({ error: 'This device already selected another vehicle' }, 409, request);
+      const existingMember = await env.DB.prepare('SELECT member_token FROM trip_members WHERE trip_id = ? AND member_id = ?')
+        .bind(tripMatch[1], memberId)
+        .first<{ member_token: string | null }>();
+      if (existingMember?.member_token && existingMember.member_token !== suppliedToken) return json({ error: 'This device session is no longer authorized' }, 403, request);
+      const memberToken = existingMember?.member_token ?? newMemberToken();
       const claim = await env.DB.prepare(
         'UPDATE trip_slots SET member_id = ?, claimed_at = ? WHERE trip_id = ? AND slot_code = ? AND (member_id IS NULL OR member_id = ?)',
       ).bind(memberId, new Date().toISOString(), tripMatch[1], slotCode, memberId).run();
       if (!claim.meta.changes) return json({ error: 'Vehicle code already taken' }, 409, request);
       await env.DB.prepare(
-        'INSERT INTO trip_members (trip_id, member_id, display_name) VALUES (?, ?, ?) ON CONFLICT(trip_id, member_id) DO UPDATE SET display_name = excluded.display_name',
-      ).bind(tripMatch[1], memberId, slotCode).run();
-      return json({ memberId, displayName: slotCode, slotCode }, 201, request);
+        'INSERT INTO trip_members (trip_id, member_id, display_name, member_token) VALUES (?, ?, ?, ?) ON CONFLICT(trip_id, member_id) DO UPDATE SET display_name = excluded.display_name, member_token = COALESCE(trip_members.member_token, excluded.member_token)',
+      ).bind(tripMatch[1], memberId, slotCode, memberToken).run();
+      return json({ memberId, displayName: slotCode, slotCode, memberToken }, 201, request);
     }
 
     if (tripMatch && url.pathname.endsWith('/members') && request.method === 'DELETE') {
       const body = await readJson(request);
-      const memberId = typeof body?.memberId === 'string' ? body.memberId.trim().slice(0, 80) : '';
-      if (!memberId) return json({ error: 'Member id is required' }, 400, request);
+      const requesterMemberId = typeof body?.requesterMemberId === 'string' ? body.requesterMemberId.trim().slice(0, 80) : '';
+      const targetMemberId = typeof body?.targetMemberId === 'string' ? body.targetMemberId.trim().slice(0, 80) : '';
+      const requesterToken = typeof body?.requesterToken === 'string' ? body.requesterToken : '';
+      if (!requesterMemberId || !targetMemberId) return json({ error: 'Member id is required' }, 400, request);
+      if (requesterMemberId === targetMemberId) {
+        const member = await env.DB.prepare('SELECT member_token FROM trip_members WHERE trip_id = ? AND member_id = ?')
+          .bind(tripMatch[1], targetMemberId)
+          .first<{ member_token: string | null }>();
+        if (member?.member_token && requesterToken !== member.member_token) return json({ error: 'This device session is no longer authorized' }, 403, request);
+      } else {
+        const password = typeof body?.leaderPassword === 'string' ? body.leaderPassword : '';
+        const trip = await env.DB.prepare('SELECT leader_password_salt, leader_password_hash FROM trips WHERE id = ?')
+          .bind(tripMatch[1])
+          .first<{ leader_password_salt: string | null; leader_password_hash: string | null }>();
+        if (!trip) return json({ error: 'Trip not found' }, 404, request);
+        if (!trip.leader_password_salt || !trip.leader_password_hash) return json({ error: 'Leader password is not configured for this trip' }, 409, request);
+        const salt = Uint8Array.from(trip.leader_password_salt.match(/.{2}/g) ?? [], (byte) => Number.parseInt(byte, 16));
+        if (!equalHash(await hashLeaderPassword(password, salt), trip.leader_password_hash)) return json({ error: 'Leader password required' }, 403, request);
+      }
       await env.DB.batch([
-        env.DB.prepare('UPDATE trip_slots SET member_id = NULL, claimed_at = NULL WHERE trip_id = ? AND member_id = ?').bind(tripMatch[1], memberId),
-        env.DB.prepare('DELETE FROM trip_members WHERE trip_id = ? AND member_id = ?').bind(tripMatch[1], memberId),
+        env.DB.prepare('UPDATE trip_slots SET member_id = NULL, claimed_at = NULL WHERE trip_id = ? AND member_id = ?').bind(tripMatch[1], targetMemberId),
+        env.DB.prepare('DELETE FROM trip_members WHERE trip_id = ? AND member_id = ?').bind(tripMatch[1], targetMemberId),
       ]);
       return json({ ok: true }, 200, request);
     }
