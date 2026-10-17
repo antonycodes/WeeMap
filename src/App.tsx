@@ -4,7 +4,7 @@ import QRCode from 'qrcode';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { getLatestCommit, hasNewerCommit, type BuildInfo } from './lib/appUpdate';
 import { speedFromMetersPerSecond } from './lib/drivingAssistant';
-import { distanceBetweenKm, parseLiveLocation, type LiveLocation } from './lib/liveLocation';
+import { distanceBetweenKm, isLiveLocationStale, parseLiveLocation, type LiveLocation } from './lib/liveLocation';
 import { extractTripCode, isValidTripCode } from './lib/tripCode';
 import { hasValidVehicleSet, parseVehicleCodes } from './lib/vehicleSlots';
 import { BrowserQRCodeReader } from '@zxing/browser';
@@ -14,6 +14,7 @@ type Position = { latitude: number; longitude: number; accuracy: number; speed: 
 type TripSlot = { code: string; memberId?: string | null; claimed: boolean };
 type TripInfo = { id: string; name: string; status: string; slots?: TripSlot[] };
 type TripMember = { memberId: string; displayName: string; joinedAt?: string };
+type SignalIssue = TripMember & { issue: 'missing' | 'stale' };
 const VEHICLE_COLORS = ['#39794b', '#3f78b5', '#a7652d', '#8a4f9f', '#bd4e65', '#16828a', '#6d6b2f', '#c34f2d'];
 
 const workerOrigin = (import.meta.env.VITE_WORKER_ORIGIN
@@ -53,6 +54,7 @@ export default function App() {
   const [scannerOpen, setScannerOpen] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
   const [tripSlots, setTripSlots] = useState<TripSlot[]>([]);
+  const [signalCheckAt, setSignalCheckAt] = useState(() => Date.now());
   const wakeLock = useRef<WakeLockSentinel | null>(null);
   const watchId = useRef<number | null>(null);
   const socket = useRef<WebSocket | null>(null);
@@ -401,6 +403,12 @@ export default function App() {
   }, [memberReady, selectedVehicleCode, tripId]);
 
   useEffect(() => {
+    if (!tripId) return;
+    const timer = window.setInterval(() => setSignalCheckAt(Date.now()), 5000);
+    return () => window.clearInterval(timer);
+  }, [tripId]);
+
+  useEffect(() => {
     if (socket.current?.readyState === WebSocket.OPEN && position) {
       sendPosition(socket.current, memberId, selectedVehicleCode, position, currentSpeed);
     }
@@ -483,6 +491,12 @@ export default function App() {
     }
     return list;
   }, [displayedMembers, roster, tripSlots]);
+  const signalIssueVehicles = useMemo<SignalIssue[]>(() => vehicleList.flatMap((vehicle): SignalIssue[] => {
+    if (vehicle.memberId.startsWith('slot:') || vehicle.memberId === memberId) return [];
+    const location = displayedMembers[vehicle.memberId];
+    if (!location) return [{ ...vehicle, issue: 'missing' as const }];
+    return isLiveLocationStale(location.recordedAt, signalCheckAt) ? [{ ...vehicle, issue: 'stale' as const }] : [];
+  }), [displayedMembers, memberId, signalCheckAt, vehicleList]);
 
   return (
     <main className="map-shell">
@@ -505,12 +519,14 @@ export default function App() {
           <span className={`status-dot status-${gpsState}`} />
           <span>{position ? 'Đang định vị' : gpsState === 'blocked' ? 'GPS chưa sẵn sàng' : 'Đang tìm vị trí'}</span>
           {position && <small>± {Math.round(position.accuracy)} m</small>}
+          {signalIssueVehicles.length > 0 && <span className="map-signal-warning" role="alert">{signalIssueVehicles.length} xe cần kiểm tra GPS</span>}
         </div>
 
         <div className={`map-controls${panelOpen ? '' : ' map-controls-full'}`} aria-label="Điều khiển bản đồ">
           <button className="map-control" type="button" aria-label="Phóng to" onClick={() => { const nextZoom = Math.min(20, mapZoom + 1); setMapZoom(nextZoom); mapInstance.current?.setZoom(nextZoom); }}>+</button>
           <button className="map-control" type="button" aria-label="Thu nhỏ" onClick={() => { const nextZoom = Math.max(4, mapZoom - 1); setMapZoom(nextZoom); mapInstance.current?.setZoom(nextZoom); }}>−</button>
-          <button className="map-control locate-control" type="button" aria-label="Vị trí hiện tại" disabled={!position} onClick={() => position && mapInstance.current?.flyTo({ center: [position.longitude, position.latitude], zoom: Math.max(mapZoom, 15) })}>⌖</button>
+          <button className="map-control locate-control" type="button" aria-label="Vị trí hiện tại" disabled={!position} onClick={() => position && mapInstance.current?.flyTo({ center: [position.longitude, position.latitude], zoom: Math.max(mapZoom, 15) })}><img src="/icons/navigator.png" alt="" /></button>
+          <button className="map-control refresh-control" type="button" aria-label="Làm mới dữ liệu" onClick={() => window.location.reload()}>↻</button>
         </div>
 
         {panelOpen && <div className="map-sheet" role="dialog" aria-label="Thiết lập chuyến đi">
@@ -521,6 +537,7 @@ export default function App() {
             <div><span className="metric-label">Xe trong đoàn</span><strong>{Object.keys(displayedMembers).length} <small>xe</small></strong></div>
             {position && <span className="last-seen">{new Date(position.timestamp).toLocaleTimeString('vi-VN')}</span>}
           </div>
+          {signalIssueVehicles.length > 0 && <div className="signal-alert" role="alert"><span className="signal-alert-dot" aria-hidden="true" /><div><strong>GPS xe cần kiểm tra</strong><span>{signalIssueVehicles.map((vehicle) => `${vehicle.displayName} · ${vehicle.issue === 'missing' ? 'chưa có tín hiệu' : 'mất tín hiệu'}`).join('  ·  ')}</span></div></div>}
           <form className="destination-row" onSubmit={(event) => { event.preventDefault(); if (directionsUrl) window.open(directionsUrl, '_blank', 'noopener,noreferrer'); }}>
             <input className="trip-input" value={destination} onChange={(event) => setDestination(event.target.value)} aria-label="Điểm đến" placeholder="Nhập địa chỉ hoặc địa điểm cần đến" />
             <button className="trip-button" type="submit" disabled={!directionsUrl}>Dẫn đường</button>

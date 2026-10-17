@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { distanceBetweenKm, parseLiveLocation } from './liveLocation';
+import { distanceBetweenKm, isLiveLocationStale, parseLiveLocation } from './liveLocation';
 
 describe('parseLiveLocation', () => {
   it('accepts a valid location and rejects invalid coordinates', () => {
@@ -9,5 +9,10 @@ describe('parseLiveLocation', () => {
 
   it('calculates distance between two GPS points', () => {
     expect(distanceBetweenKm({ latitude: 0, longitude: 0 }, { latitude: 0, longitude: 1 })).toBeCloseTo(111.2, 0);
+  });
+
+  it('detects a location that stopped updating', () => {
+    expect(isLiveLocationStale('2026-10-17T10:00:00.000Z', Date.parse('2026-10-17T10:00:45.001Z'))).toBe(true);
+    expect(isLiveLocationStale('2026-10-17T10:00:00.000Z', Date.parse('2026-10-17T10:00:45.000Z'))).toBe(false);
   });
 });

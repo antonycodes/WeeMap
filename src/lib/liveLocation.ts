@@ -8,6 +8,13 @@ export type LiveLocation = {
   recordedAt: string;
 };
 
+export const LOCATION_STALE_AFTER_MS = 45_000;
+
+export function isLiveLocationStale(recordedAt: string, now = Date.now()): boolean {
+  const recordedAtMs = Date.parse(recordedAt);
+  return !Number.isFinite(recordedAtMs) || now - recordedAtMs > LOCATION_STALE_AFTER_MS;
+}
+
 export function distanceBetweenKm(from: Pick<LiveLocation, 'latitude' | 'longitude'>, to: Pick<LiveLocation, 'latitude' | 'longitude'>): number {
   const earthRadiusKm = 6371;
   const latitudeDelta = (to.latitude - from.latitude) * Math.PI / 180;

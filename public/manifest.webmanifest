@@ -7,9 +7,10 @@
   "theme_color": "#0d1117",
   "icons": [
     {
-      "src": "/icons/weemap.png",
+      "src": "/icons/weemap-shortcut.png",
       "sizes": "474x474",
-      "type": "image/png"
+      "type": "image/png",
+      "purpose": "any"
     }
   ]
 }

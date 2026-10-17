@@ -39,6 +39,9 @@ button { -webkit-tap-highlight-color: transparent; }
 .map-control { width: 42px; height: 42px; border-radius: 13px; font-size: 21px; line-height: 1; }
 .map-control:disabled { cursor: not-allowed; opacity: .48; }
 .locate-control { margin-top: 7px; color: #2d8c5a; font-size: 25px; }
+.locate-control img { width: 22px; height: 22px; object-fit: contain; }
+.refresh-control { color: #39794b; font-size: 25px; }
+.map-signal-warning { color: #b3622c; font-size: 10px; font-weight: 750; }
 .update-banner { top: 132px; right: 16px; left: 16px; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 10px 12px 10px 14px; border: 1px solid #8fbd76; border-radius: 14px; color: #244528; background: rgba(226,244,214,.94); box-shadow: 0 12px 28px rgba(52,92,46,.16); backdrop-filter: blur(14px); font-size: 12px; }
 .update-banner button { border: 0; border-radius: 999px; padding: 7px 11px; color: #f7fff4; background: #39794b; cursor: pointer; font-size: 11px; font-weight: 750; }
 .map-sheet { right: 0; bottom: 0; left: 0; max-height: min(82dvh, 760px); overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; padding: 20px 18px max(18px, env(safe-area-inset-bottom)); border: 1px solid rgba(255,255,255,.78); border-bottom: 0; border-radius: 25px 25px 0 0; background: rgba(248,251,249,.94); box-shadow: 0 -14px 40px rgba(39,72,56,.16); backdrop-filter: blur(20px); }
@@ -55,6 +58,11 @@ h1 { margin: 0; color: #17221f; font-size: clamp(21px, 5vw, 28px); letter-spacin
 .driving-row strong small { color: #769080; font-size: 12px; font-weight: 600; letter-spacing: -.02em; }
 .driving-divider { width: 1px; height: 40px; background: #d6e1d9; }
 .last-seen { align-self: end; margin-left: auto; color: #91a199; font-size: 10px; }
+.signal-alert { display: flex; align-items: flex-start; gap: 9px; margin: -2px 0 13px; padding: 10px 12px; border: 1px solid #edc69e; border-radius: 12px; color: #7f4d25; background: #fff4e7; }
+.signal-alert-dot { flex: 0 0 auto; width: 8px; height: 8px; margin-top: 4px; border-radius: 50%; background: #d7833a; box-shadow: 0 0 0 4px rgba(215,131,58,.14); }
+.signal-alert strong, .signal-alert span { display: block; }
+.signal-alert strong { font-size: 11px; }
+.signal-alert span { margin-top: 3px; font-size: 10px; line-height: 1.4; }
 .trip-setup { display: grid; gap: 9px; margin-top: 15px; padding-top: 14px; border-top: 1px solid #dfe8e1; }
 .vehicle-count-row { display: grid; grid-template-columns: 1fr 96px; align-items: center; gap: 8px; color: #466056; font-size: 11px; }
 .vehicle-code-editor { min-height: 58px; resize: vertical; }
