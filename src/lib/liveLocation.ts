@@ -8,6 +8,17 @@ export type LiveLocation = {
   recordedAt: string;
 };
 
+export function distanceBetweenKm(from: Pick<LiveLocation, 'latitude' | 'longitude'>, to: Pick<LiveLocation, 'latitude' | 'longitude'>): number {
+  const earthRadiusKm = 6371;
+  const latitudeDelta = (to.latitude - from.latitude) * Math.PI / 180;
+  const longitudeDelta = (to.longitude - from.longitude) * Math.PI / 180;
+  const latitude = from.latitude * Math.PI / 180;
+  const targetLatitude = to.latitude * Math.PI / 180;
+  const haversine = Math.sin(latitudeDelta / 2) ** 2
+    + Math.cos(latitude) * Math.cos(targetLatitude) * Math.sin(longitudeDelta / 2) ** 2;
+  return earthRadiusKm * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(1 - haversine));
+}
+
 export function parseLiveLocation(value: unknown): LiveLocation | null {
   if (!value || typeof value !== 'object') return null;
   const item = value as Partial<LiveLocation> & { type?: unknown };

@@ -32,6 +32,7 @@ button { -webkit-tap-highlight-color: transparent; }
 .location-marker { position: absolute; top: 42%; left: 50%; width: 26px; height: 26px; border: 3px solid #fff; border-radius: 50% 50% 50% 0; background: #36a466; box-shadow: 0 8px 18px rgba(30,75,52,.28); transform: rotate(-45deg); }
 .location-marker span { position: absolute; top: 6px; left: 6px; width: 8px; height: 8px; border-radius: 50%; background: #fff; }
 .map-controls { right: 16px; bottom: 246px; display: grid; gap: 8px; }
+.map-controls-full { bottom: 24px; }
 .map-control { width: 42px; height: 42px; border-radius: 13px; font-size: 21px; line-height: 1; }
 .map-control:disabled { cursor: not-allowed; opacity: .48; }
 .locate-control { margin-top: 7px; color: #2d8c5a; font-size: 25px; }
@@ -57,6 +58,9 @@ h1 { margin: 0; color: #17221f; font-size: clamp(21px, 5vw, 28px); letter-spacin
 .trip-actions { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 7px; }
 .trip-input { min-width: 0; border: 1px solid #d5e1d8; border-radius: 10px; padding: 9px 10px; color: #244b37; background: #fff; font-size: 11px; outline: none; }
 .trip-input:focus { border-color: #4ca56e; box-shadow: 0 0 0 3px rgba(76,165,110,.14); }
+.destination-row { display: flex; gap: 8px; margin-top: 12px; }
+.destination-row .trip-input { flex: 1; }
+.destination-row .trip-button { flex: 0 0 auto; }
 .trip-code-input { min-width: 0; }
 .trip-button { border: 0; border-radius: 10px; padding: 9px 11px; color: #f7fff4; background: #39794b; cursor: pointer; font-size: 11px; font-weight: 750; white-space: nowrap; }
 .trip-button:disabled { cursor: wait; opacity: .55; }
@@ -72,6 +76,7 @@ h1 { margin: 0; color: #17221f; font-size: clamp(21px, 5vw, 28px); letter-spacin
 .vehicle-row { display: flex; align-items: center; gap: 8px; min-height: 28px; color: #355047; font-size: 11px; }
 .vehicle-swatch { width: 10px; height: 10px; border: 2px solid #fff; border-radius: 50%; box-shadow: 0 1px 4px rgba(30,75,52,.2); }
 .vehicle-name { overflow: hidden; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.vehicle-distance { min-width: 44px; color: #557261; font-size: 10px; text-align: right; }
 .vehicle-state { margin-left: auto; color: #8b9b93; font-size: 9px; }
 .share-box { display: grid; justify-items: center; gap: 10px; margin-top: 12px; padding: 14px; border: 1px solid #dfe8e1; border-radius: 16px; background: #fff; }
 .share-heading { display: flex; align-items: center; justify-content: space-between; width: 100%; color: #244b37; font-size: 12px; }
@@ -86,4 +91,4 @@ input[type=range] { width: 100%; accent-color: #4ca56e; }
 output { min-width: 66px; color: #39794b; font-size: 12px; text-align: right; }
 .settings-panel p { margin: 10px 0 0; color: #82928a; font-size: 11px; line-height: 1.45; }
 .sheet-footer { margin-top: 17px; padding-top: 12px; border-top: 1px solid #e0e9e2; color: #8b9b93; font-size: 10px; }
-@media (min-width: 700px) { .map-toolbar { right: 28px; left: 28px; } .map-status { top: 88px; left: 28px; } .map-controls { right: 28px; bottom: 254px; } .map-sheet { right: 28px; bottom: 28px; left: auto; width: min(430px, calc(100% - 56px)); border-bottom: 1px solid rgba(255,255,255,.78); border-radius: 25px; } .update-banner { top: 142px; right: 28px; left: auto; width: min(370px, calc(100% - 56px)); } }
+@media (min-width: 700px) { .map-toolbar { right: 28px; left: 28px; } .map-status { top: 88px; left: 28px; } .map-controls { right: 28px; bottom: 254px; } .map-controls-full { bottom: 28px; } .map-sheet { right: 28px; bottom: 28px; left: auto; width: min(430px, calc(100% - 56px)); border-bottom: 1px solid rgba(255,255,255,.78); border-radius: 25px; } .update-banner { top: 142px; right: 28px; left: auto; width: min(370px, calc(100% - 56px)); } }

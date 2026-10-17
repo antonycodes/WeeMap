@@ -4,7 +4,7 @@ import QRCode from 'qrcode';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { getLatestCommit, hasNewerCommit, type BuildInfo } from './lib/appUpdate';
 import { DEFAULT_SPEED_LIMIT, isOverSpeedLimit, speedFromMetersPerSecond } from './lib/drivingAssistant';
-import { parseLiveLocation, type LiveLocation } from './lib/liveLocation';
+import { distanceBetweenKm, parseLiveLocation, type LiveLocation } from './lib/liveLocation';
 
 type CheckState = 'ok' | 'pending' | 'blocked';
 type Position = { latitude: number; longitude: number; accuracy: number; speed: number | null; timestamp: number };
@@ -25,9 +25,10 @@ export default function App() {
   const [wakeState, setWakeState] = useState<CheckState>('pending');
   const [serverState, setServerState] = useState<CheckState>('pending');
   const [updateAvailable, setUpdateAvailable] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [panelOpen, setPanelOpen] = useState(false);
   const [mapZoom, setMapZoom] = useState(12);
   const [position, setPosition] = useState<Position | null>(null);
+  const [destination, setDestination] = useState('');
   const [members, setMembers] = useState<Record<string, LiveLocation>>({});
   const [speedLimit, setSpeedLimit] = useState(DEFAULT_SPEED_LIMIT);
   const [error, setError] = useState<string | null>(null);
@@ -56,6 +57,9 @@ export default function App() {
   const shareUrl = tripId ? `${window.location.origin}${window.location.pathname}?trip=${encodeURIComponent(tripId)}` : '';
 
   const currentSpeed = useMemo(() => speedFromMetersPerSecond(position?.speed ?? null), [position]);
+  const directionsUrl = position && destination.trim()
+    ? `https://www.google.com/maps/dir/?api=1&origin=${position.latitude},${position.longitude}&destination=${encodeURIComponent(destination.trim())}&travelmode=driving`
+    : undefined;
   const speeding = isOverSpeedLimit(currentSpeed, speedLimit);
   const getVehicleColor = (id: string) => {
     const existing = colors.current.get(id);
@@ -423,7 +427,7 @@ export default function App() {
 
         <header className="map-toolbar">
           <div className="brand-lockup"><span className="brand-dot" /> <strong>WeeMap</strong><span className="trip-label">{tripId ? 'Đang theo đoàn' : 'Bản đồ nhóm'}</span></div>
-          <button className="round-button" type="button" aria-label="Mở cài đặt" onClick={() => setSettingsOpen((open) => !open)}>•••</button>
+          <button className="round-button" type="button" aria-label={panelOpen ? 'Ẩn setup chuyến đi' : 'Hiện setup chuyến đi'} onClick={() => setPanelOpen((open) => !open)}>•••</button>
         </header>
 
         {updateAvailable && (
@@ -439,13 +443,13 @@ export default function App() {
           {position && <small>± {Math.round(position.accuracy)} m</small>}
         </div>
 
-        <div className="map-controls" aria-label="Điều khiển bản đồ">
+        <div className={`map-controls${panelOpen ? '' : ' map-controls-full'}`} aria-label="Điều khiển bản đồ">
           <button className="map-control" type="button" aria-label="Phóng to" onClick={() => { const nextZoom = Math.min(20, mapZoom + 1); setMapZoom(nextZoom); mapInstance.current?.setZoom(nextZoom); }}>+</button>
           <button className="map-control" type="button" aria-label="Thu nhỏ" onClick={() => { const nextZoom = Math.max(4, mapZoom - 1); setMapZoom(nextZoom); mapInstance.current?.setZoom(nextZoom); }}>−</button>
           <button className="map-control locate-control" type="button" aria-label="Vị trí hiện tại" disabled={!position} onClick={() => position && mapInstance.current?.flyTo({ center: [position.longitude, position.latitude], zoom: Math.max(mapZoom, 15) })}>⌖</button>
         </div>
 
-        <div className="map-sheet">
+        {panelOpen && <div className="map-sheet">
           {speeding && <div className="speed-alert" role="alert">Giảm tốc độ · trên {speedLimit} km/h</div>}
           <div className="sheet-heading"><div><span className="eyebrow">CHUYẾN ĐI</span><h1>{tripId ? tripInfo?.name ?? 'Đoàn xe đang chạy' : 'Bản đồ của bạn'}</h1></div><span className={`connection-pill connection-${serverState}`}>{serverState === 'ok' ? 'Trực tuyến' : 'PoC'}</span></div>
           <div className="driving-row">
@@ -454,10 +458,14 @@ export default function App() {
             <div><span className="metric-label">Xe trong đoàn</span><strong>{Object.keys(liveMembers).length} <small>xe</small></strong></div>
             {position && <span className="last-seen">{new Date(position.timestamp).toLocaleTimeString('vi-VN')}</span>}
           </div>
-          {tripId ? <><div className="trip-room"><span>Mã đoàn: <strong>{tripId}</strong></span><button className="trip-button trip-button-soft" type="button" onClick={() => setShareOpen(true)}>Chia sẻ</button></div>{!memberReady && <div className="trip-entry"><strong>Đặt tên xe để vào đoàn</strong><div className="trip-entry-row"><input className="trip-input" value={memberName} onChange={(event) => setMemberName(event.target.value)} aria-label="Tên xe" placeholder="Ví dụ: Xe Antony" maxLength={40} /><button className="trip-button" type="button" disabled={memberBusy} onClick={() => void enterSharedTrip()}>{memberBusy ? 'Đang vào…' : 'Vào đoàn'}</button></div></div>}{shareOpen && <div className="share-box" role="dialog" aria-label="Chia sẻ chuyến đi"><div className="share-heading"><strong>Mời xe vào đoàn</strong><button type="button" className="share-close" aria-label="Đóng" onClick={() => setShareOpen(false)}>×</button></div>{qrDataUrl ? <img className="share-qr" src={qrDataUrl} alt="Mã QR tham gia WeeMap" /> : <div className="share-qr share-qr-placeholder">Đang tạo QR…</div>}<span className="share-link">{shareUrl}</span><button className="trip-button" type="button" onClick={() => void copyTripLink()}>{shareStatus}</button></div>}<div className="vehicle-list"><div className="vehicle-list-heading"><strong>Xe trong đoàn</strong><span>{vehicleList.length}</span></div>{vehicleList.map((vehicle) => <div className="vehicle-row" key={vehicle.memberId}><span className="vehicle-swatch" style={{ backgroundColor: getVehicleColor(vehicle.memberId) }} /><span className="vehicle-name">{vehicle.displayName}</span><span className="vehicle-state">{liveMembers[vehicle.memberId] ? 'Đang chạy' : 'Đã vào'}</span></div>)}</div></> : <div className="trip-setup"><input className="trip-input" value={tripName} onChange={(event) => setTripName(event.target.value)} aria-label="Tên chuyến đi" placeholder="Tên chuyến đi" /><input className="trip-input" value={memberName} onChange={(event) => setMemberName(event.target.value)} aria-label="Tên xe" placeholder="Tên xe của bạn" maxLength={40} /><div className="trip-actions"><button className="trip-button" type="button" disabled={tripBusy} onClick={() => void createTrip()}>{tripBusy ? 'Đang tạo…' : 'Tạo đoàn mới'}</button><input className="trip-input trip-code-input" value={tripInput} onChange={(event) => setTripInput(event.target.value)} aria-label="Mã chuyến đi" placeholder="Dán mã đoàn" /><button className="trip-button trip-button-soft" type="button" disabled={tripBusy} onClick={() => void joinTrip()}>Tham gia</button></div>{tripError && <p className="trip-error" role="alert">{tripError}</p>}</div>}
-          {settingsOpen && <div className="settings-panel"><label htmlFor="speed-limit">Ngưỡng cảnh báo</label><div className="range-row"><input id="speed-limit" type="range" min="30" max="120" step="5" value={speedLimit} onChange={(event) => setSpeedLimit(Number(event.target.value))} /><output>{speedLimit} km/h</output></div><p>{standalone ? 'Đã cài trên màn hình chính.' : 'Thêm app vào màn hình chính để dùng ổn định hơn.'} {wakeState === 'ok' ? 'Màn hình đang được giữ sáng.' : 'Màn hình chưa được giữ sáng.'}</p></div>}
+          <form className="destination-row" onSubmit={(event) => { event.preventDefault(); if (directionsUrl) window.open(directionsUrl, '_blank', 'noopener,noreferrer'); }}>
+            <input className="trip-input" value={destination} onChange={(event) => setDestination(event.target.value)} aria-label="Điểm đến" placeholder="Nhập địa chỉ hoặc địa điểm cần đến" />
+            <button className="trip-button" type="submit" disabled={!directionsUrl}>Dẫn đường</button>
+          </form>
+          {tripId ? <><div className="trip-room"><span>Mã đoàn: <strong>{tripId}</strong></span><button className="trip-button trip-button-soft" type="button" onClick={() => setShareOpen(true)}>Chia sẻ</button></div>{!memberReady && <div className="trip-entry"><strong>Đặt tên xe để vào đoàn</strong><div className="trip-entry-row"><input className="trip-input" value={memberName} onChange={(event) => setMemberName(event.target.value)} aria-label="Tên xe" placeholder="Ví dụ: Xe Antony" maxLength={40} /><button className="trip-button" type="button" disabled={memberBusy} onClick={() => void enterSharedTrip()}>{memberBusy ? 'Đang vào…' : 'Vào đoàn'}</button></div></div>}{shareOpen && <div className="share-box" role="dialog" aria-label="Chia sẻ chuyến đi"><div className="share-heading"><strong>Mời xe vào đoàn</strong><button type="button" className="share-close" aria-label="Đóng" onClick={() => setShareOpen(false)}>×</button></div>{qrDataUrl ? <img className="share-qr" src={qrDataUrl} alt="Mã QR tham gia WeeMap" /> : <div className="share-qr share-qr-placeholder">Đang tạo QR…</div>}<span className="share-link">{shareUrl}</span><button className="trip-button" type="button" onClick={() => void copyTripLink()}>{shareStatus}</button></div>}<div className="vehicle-list"><div className="vehicle-list-heading"><strong>Xe trong đoàn</strong><span>{vehicleList.length}</span></div>{vehicleList.map((vehicle) => <div className="vehicle-row" key={vehicle.memberId}><span className="vehicle-swatch" style={{ backgroundColor: getVehicleColor(vehicle.memberId) }} /><span className="vehicle-name">{vehicle.displayName}</span><span className="vehicle-distance">{vehicle.memberId === memberId ? 'Bạn' : position && liveMembers[vehicle.memberId] ? formatDistance(distanceBetweenKm(position, liveMembers[vehicle.memberId]!)) : '—'}</span><span className="vehicle-state">{liveMembers[vehicle.memberId] ? 'Đang chạy' : 'Đã vào'}</span></div>)}</div></> : <div className="trip-setup"><input className="trip-input" value={tripName} onChange={(event) => setTripName(event.target.value)} aria-label="Tên chuyến đi" placeholder="Tên chuyến đi" /><input className="trip-input" value={memberName} onChange={(event) => setMemberName(event.target.value)} aria-label="Tên xe" placeholder="Tên xe của bạn" maxLength={40} /><div className="trip-actions"><button className="trip-button" type="button" disabled={tripBusy} onClick={() => void createTrip()}>{tripBusy ? 'Đang tạo…' : 'Tạo đoàn mới'}</button><input className="trip-input trip-code-input" value={tripInput} onChange={(event) => setTripInput(event.target.value)} aria-label="Mã chuyến đi" placeholder="Dán mã đoàn" /><button className="trip-button trip-button-soft" type="button" disabled={tripBusy} onClick={() => void joinTrip()}>Tham gia</button></div>{tripError && <p className="trip-error" role="alert">{tripError}</p>}</div>}
+          <div className="settings-panel"><label htmlFor="speed-limit">Ngưỡng cảnh báo</label><div className="range-row"><input id="speed-limit" type="range" min="30" max="120" step="5" value={speedLimit} onChange={(event) => setSpeedLimit(Number(event.target.value))} /><output>{speedLimit} km/h</output></div><p>{standalone ? 'Đã cài trên màn hình chính.' : 'Thêm app vào màn hình chính để dùng ổn định hơn.'} {wakeState === 'ok' ? 'Màn hình đang được giữ sáng.' : 'Màn hình chưa được giữ sáng.'}</p></div>
           <div className="sheet-footer"><span>{tripId ? `${Object.keys(liveMembers).length} xe đang chia sẻ vị trí` : position ? `${position.latitude.toFixed(5)}, ${position.longitude.toFixed(5)}` : error ?? 'Bật GPS để bắt đầu'}</span><span>Biển báo · phase sau</span></div>
-        </div>
+        </div>}
       </section>
     </main>
   );
@@ -477,6 +485,10 @@ function updateVehicleMarker(element: HTMLElement, isCurrent: boolean, displayNa
   element.style.setProperty('--vehicle-color', color);
   element.textContent = isCurrent ? 'Bạn' : displayName;
   element.title = `${displayName} · ${speedKmh === undefined ? '—' : `${Math.round(speedKmh)} km/h`}`;
+}
+
+function formatDistance(distanceKm: number): string {
+  return distanceKm < 1 ? `${Math.round(distanceKm * 1000)} m` : `${distanceKm.toFixed(1)} km`;
 }
 
 function sendPosition(socket: WebSocket, memberId: string, displayName: string, position: Position, speedKmh: number | null) {
