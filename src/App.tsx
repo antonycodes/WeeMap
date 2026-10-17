@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AttributionControl, Map as MapLibreMap, Marker } from 'maplibre-gl';
+import 'maplibre-gl/dist/maplibre-gl.css';
 import { getLatestCommit, hasNewerCommit, type BuildInfo } from './lib/appUpdate';
 import { DEFAULT_SPEED_LIMIT, isOverSpeedLimit, speedFromMetersPerSecond } from './lib/drivingAssistant';
-import { loadGoogleMaps } from './lib/googleMaps';
+import { parseLiveLocation, type LiveLocation } from './lib/liveLocation';
 
 type CheckState = 'ok' | 'pending' | 'blocked';
 type Position = { latitude: number; longitude: number; accuracy: number; speed: number | null; timestamp: number };
-type MapController = { setZoom: (zoom: number) => void; panTo: (center: { lat: number; lng: number }) => void };
 
 function isStandalone(): boolean {
   return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
@@ -20,19 +21,86 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [mapZoom, setMapZoom] = useState(12);
   const [position, setPosition] = useState<Position | null>(null);
+  const [members, setMembers] = useState<Record<string, LiveLocation>>({});
   const [speedLimit, setSpeedLimit] = useState(DEFAULT_SPEED_LIMIT);
   const [error, setError] = useState<string | null>(null);
+  const [tripInput, setTripInput] = useState('');
+  const [tripName, setTripName] = useState('Chuyến đi mới');
+  const [tripBusy, setTripBusy] = useState(false);
+  const [tripError, setTripError] = useState<string | null>(null);
+  const [shareStatus, setShareStatus] = useState('Chia sẻ');
   const wakeLock = useRef<WakeLockSentinel | null>(null);
   const watchId = useRef<number | null>(null);
   const socket = useRef<WebSocket | null>(null);
-  const mapInstance = useRef<MapController | null>(null);
+  const mapInstance = useRef<MapLibreMap | null>(null);
+  const markers = useRef<Map<string, Marker>>(new Map());
+  const centeredOnPosition = useRef(false);
   const memberId = useRef(crypto.randomUUID()).current;
   const mapRef = useRef<HTMLDivElement>(null);
-  const mapsKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
   const tripId = new URLSearchParams(window.location.search).get('trip');
 
   const currentSpeed = useMemo(() => speedFromMetersPerSecond(position?.speed ?? null), [position]);
   const speeding = isOverSpeedLimit(currentSpeed, speedLimit);
+  const liveMembers = useMemo(() => {
+    if (!position) return members;
+    return {
+      ...members,
+      [memberId]: {
+        memberId,
+        latitude: position.latitude,
+        longitude: position.longitude,
+        accuracy: position.accuracy,
+        speedKmh: currentSpeed ?? undefined,
+        recordedAt: new Date(position.timestamp).toISOString(),
+      },
+    };
+  }, [currentSpeed, memberId, members, position]);
+
+  const createTrip = async () => {
+    setTripBusy(true);
+    setTripError(null);
+    try {
+      const response = await fetch('/api/trips', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: tripName.trim() || 'Chuyến đi mới' }),
+      });
+      if (!response.ok) throw new Error('Không tạo được chuyến đi.');
+      const created = (await response.json()) as { id?: string };
+      if (!created.id) throw new Error('Mã chuyến đi không hợp lệ.');
+      window.location.assign(`${window.location.pathname}?trip=${encodeURIComponent(created.id)}`);
+    } catch (nextError) {
+      setTripError(nextError instanceof Error ? nextError.message : 'Không tạo được chuyến đi.');
+      setTripBusy(false);
+    }
+  };
+
+  const joinTrip = async () => {
+    const id = tripInput.trim();
+    if (!/^[0-9a-f-]{36}$/i.test(id)) {
+      setTripError('Nhập đúng mã chuyến đi 36 ký tự.');
+      return;
+    }
+    setTripBusy(true);
+    setTripError(null);
+    try {
+      const response = await fetch(`/api/trips/${id}`);
+      if (!response.ok) throw new Error('Không tìm thấy chuyến đi.');
+      window.location.assign(`${window.location.pathname}?trip=${encodeURIComponent(id)}`);
+    } catch (nextError) {
+      setTripError(nextError instanceof Error ? nextError.message : 'Không tham gia được chuyến đi.');
+      setTripBusy(false);
+    }
+  };
+
+  const copyTripLink = async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setShareStatus('Đã sao chép');
+    } catch {
+      setShareStatus('Không sao chép được');
+    }
+  };
 
   const requestWakeLock = useCallback(async () => {
     if (!('wakeLock' in navigator)) {
@@ -127,6 +195,14 @@ export default function App() {
       setServerState('ok');
       if (position) sendPosition(nextSocket, memberId, position, currentSpeed);
     });
+    nextSocket.addEventListener('message', (event) => {
+      try {
+        const location = parseLiveLocation(JSON.parse(event.data) as unknown);
+        if (location) setMembers((previous) => ({ ...previous, [location.memberId]: location }));
+      } catch {
+        // Ignore malformed room messages.
+      }
+    });
     nextSocket.addEventListener('error', () => setServerState('blocked'));
     return () => {
       nextSocket.close();
@@ -141,23 +217,72 @@ export default function App() {
   }, [position, currentSpeed, memberId]);
 
   useEffect(() => {
-    if (!mapsKey || !mapRef.current) return;
-    void loadGoogleMaps(mapsKey)
-      .then(() => {
-        if (!mapRef.current || !window.google?.maps) return;
-        const center = position ? { lat: position.latitude, lng: position.longitude } : { lat: 10.7769, lng: 106.7009 };
-        mapInstance.current = new window.google.maps.Map(mapRef.current, { center, zoom: mapZoom, disableDefaultUI: true });
-      })
-      .catch(() => setError('Không tải được Google Maps. Kiểm tra key local.'));
-  }, [mapsKey, mapZoom, position]);
+    if (!mapRef.current || mapInstance.current) return;
+    const map = new MapLibreMap({
+      container: mapRef.current,
+      style: {
+        version: 8,
+        sources: {
+          osm: {
+            type: 'raster',
+            // shortcut: public OSM tiles are for the PoC; switch provider before production traffic.
+            tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+            tileSize: 256,
+            attribution: '© OpenStreetMap contributors',
+          },
+        },
+        layers: [{ id: 'osm', type: 'raster', source: 'osm' }],
+      },
+      center: [106.7009, 10.7769],
+      zoom: mapZoom,
+      attributionControl: false,
+    });
+    map.addControl(new AttributionControl({ compact: true }), 'top-left');
+    mapInstance.current = map;
+    return () => {
+      for (const marker of markers.current.values()) marker.remove();
+      markers.current.clear();
+      map.remove();
+      mapInstance.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!position || !mapInstance.current || centeredOnPosition.current) return;
+    centeredOnPosition.current = true;
+    mapInstance.current.flyTo({ center: [position.longitude, position.latitude], zoom: Math.max(mapZoom, 15) });
+  }, [mapZoom, position]);
+
+  useEffect(() => {
+    const map = mapInstance.current;
+    if (!map) return;
+    const activeIds = new Set(Object.keys(liveMembers));
+    for (const [id, location] of Object.entries(liveMembers)) {
+      const isCurrent = id === memberId;
+      let marker = markers.current.get(id);
+      if (!marker) {
+        marker = new Marker({ element: createVehicleMarker(isCurrent, id) }).setLngLat([location.longitude, location.latitude]).addTo(map);
+        markers.current.set(id, marker);
+      } else {
+        marker.setLngLat([location.longitude, location.latitude]);
+      }
+      updateVehicleMarker(marker.getElement(), isCurrent, location.speedKmh);
+    }
+    for (const [id, marker] of markers.current) {
+      if (!activeIds.has(id)) {
+        marker.remove();
+        markers.current.delete(id);
+      }
+    }
+  }, [liveMembers, memberId]);
 
   return (
     <main className="map-shell">
       <section className="map-stage" aria-label="Bản đồ WeeMap">
-        {mapsKey ? <div className="map" ref={mapRef} /> : <div className="map map-placeholder"><span>WEE<span>MAP</span></span><p>Đang chờ kết nối bản đồ.</p></div>}
+        <div className="map" ref={mapRef} />
 
         <header className="map-toolbar">
-          <div className="brand-lockup"><span className="brand-dot" /> <strong>WeeMap</strong><span className="trip-label">{tripId ? 'Đang theo đoàn' : 'Chưa vào đoàn'}</span></div>
+          <div className="brand-lockup"><span className="brand-dot" /> <strong>WeeMap</strong><span className="trip-label">{tripId ? 'Đang theo đoàn' : 'Bản đồ nhóm'}</span></div>
           <button className="round-button" type="button" aria-label="Mở cài đặt" onClick={() => setSettingsOpen((open) => !open)}>•••</button>
         </header>
 
@@ -174,12 +299,10 @@ export default function App() {
           {position && <small>± {Math.round(position.accuracy)} m</small>}
         </div>
 
-        {position && <div className="location-marker" aria-label="Vị trí hiện tại"><span /></div>}
-
         <div className="map-controls" aria-label="Điều khiển bản đồ">
-          <button className="map-control" type="button" aria-label="Phóng to" disabled={!mapsKey} onClick={() => { const nextZoom = Math.min(20, mapZoom + 1); setMapZoom(nextZoom); mapInstance.current?.setZoom(nextZoom); }}>+</button>
-          <button className="map-control" type="button" aria-label="Thu nhỏ" disabled={!mapsKey} onClick={() => { const nextZoom = Math.max(4, mapZoom - 1); setMapZoom(nextZoom); mapInstance.current?.setZoom(nextZoom); }}>−</button>
-          <button className="map-control locate-control" type="button" aria-label="Vị trí hiện tại" disabled={!mapsKey || !position} onClick={() => position && mapInstance.current?.panTo({ lat: position.latitude, lng: position.longitude })}>⌖</button>
+          <button className="map-control" type="button" aria-label="Phóng to" onClick={() => { const nextZoom = Math.min(20, mapZoom + 1); setMapZoom(nextZoom); mapInstance.current?.setZoom(nextZoom); }}>+</button>
+          <button className="map-control" type="button" aria-label="Thu nhỏ" onClick={() => { const nextZoom = Math.max(4, mapZoom - 1); setMapZoom(nextZoom); mapInstance.current?.setZoom(nextZoom); }}>−</button>
+          <button className="map-control locate-control" type="button" aria-label="Vị trí hiện tại" disabled={!position} onClick={() => position && mapInstance.current?.flyTo({ center: [position.longitude, position.latitude], zoom: Math.max(mapZoom, 15) })}>⌖</button>
         </div>
 
         <div className="map-sheet">
@@ -188,15 +311,30 @@ export default function App() {
           <div className="driving-row">
             <div><span className="metric-label">Tốc độ hiện tại</span><strong className={speeding ? 'speed-danger' : ''}>{currentSpeed ?? '—'} <small>km/h</small></strong></div>
             <div className="driving-divider" />
-            <div><span className="metric-label">Cảnh báo ở</span><strong>{speedLimit} <small>km/h</small></strong></div>
+            <div><span className="metric-label">Xe trong đoàn</span><strong>{Object.keys(liveMembers).length} <small>xe</small></strong></div>
             {position && <span className="last-seen">{new Date(position.timestamp).toLocaleTimeString('vi-VN')}</span>}
           </div>
+          {tripId ? <div className="trip-room"><span>Mã đoàn: <strong>{tripId}</strong></span><button className="trip-button trip-button-soft" type="button" onClick={() => void copyTripLink()}>{shareStatus}</button></div> : <div className="trip-setup"><input className="trip-input" value={tripName} onChange={(event) => setTripName(event.target.value)} aria-label="Tên chuyến đi" placeholder="Tên chuyến đi" /><div className="trip-actions"><button className="trip-button" type="button" disabled={tripBusy} onClick={() => void createTrip()}>{tripBusy ? 'Đang tạo…' : 'Tạo đoàn mới'}</button><input className="trip-input trip-code-input" value={tripInput} onChange={(event) => setTripInput(event.target.value)} aria-label="Mã chuyến đi" placeholder="Dán mã đoàn" /><button className="trip-button trip-button-soft" type="button" disabled={tripBusy} onClick={() => void joinTrip()}>Tham gia</button></div>{tripError && <p className="trip-error" role="alert">{tripError}</p>}</div>}
           {settingsOpen && <div className="settings-panel"><label htmlFor="speed-limit">Ngưỡng cảnh báo</label><div className="range-row"><input id="speed-limit" type="range" min="30" max="120" step="5" value={speedLimit} onChange={(event) => setSpeedLimit(Number(event.target.value))} /><output>{speedLimit} km/h</output></div><p>{standalone ? 'Đã cài trên màn hình chính.' : 'Thêm app vào màn hình chính để dùng ổn định hơn.'} {wakeState === 'ok' ? 'Màn hình đang được giữ sáng.' : 'Màn hình chưa được giữ sáng.'}</p></div>}
-          <div className="sheet-footer"><span>{position ? `${position.latitude.toFixed(5)}, ${position.longitude.toFixed(5)}` : error ?? 'Bật GPS để bắt đầu'}</span><span>Biển báo · phase sau</span></div>
+          <div className="sheet-footer"><span>{tripId ? `${Object.keys(liveMembers).length} xe đang chia sẻ vị trí` : position ? `${position.latitude.toFixed(5)}, ${position.longitude.toFixed(5)}` : error ?? 'Bật GPS để bắt đầu'}</span><span>Biển báo · phase sau</span></div>
         </div>
       </section>
     </main>
   );
+}
+
+function createVehicleMarker(isCurrent: boolean, memberId: string): HTMLDivElement {
+  const element = document.createElement('div');
+  element.className = `vehicle-marker${isCurrent ? ' vehicle-marker-current' : ''}`;
+  element.setAttribute('role', 'img');
+  element.setAttribute('aria-label', isCurrent ? 'Vị trí của bạn' : `Xe ${memberId.slice(0, 5)}`);
+  element.dataset.label = `Xe ${memberId.slice(0, 3).toUpperCase()}`;
+  return element;
+}
+
+function updateVehicleMarker(element: HTMLElement, isCurrent: boolean, speedKmh?: number): void {
+  element.textContent = isCurrent ? 'Bạn' : element.dataset.label ?? 'Xe';
+  element.title = `${isCurrent ? 'Bạn' : 'Xe'} · ${speedKmh === undefined ? '—' : `${Math.round(speedKmh)} km/h`}`;
 }
 
 function sendPosition(socket: WebSocket, memberId: string, position: Position, speedKmh: number | null) {

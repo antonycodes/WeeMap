@@ -6,6 +6,11 @@ button { -webkit-tap-highlight-color: transparent; }
 .map-shell, .map-stage { width: 100%; height: 100dvh; min-height: 520px; }
 .map-stage { position: relative; overflow: hidden; isolation: isolate; }
 .map { position: absolute; inset: 0; width: 100%; height: 100%; background: #dce6df; }
+.maplibregl-ctrl-top-left { top: 116px; left: 16px; }
+.maplibregl-ctrl-attrib { color: #53665d; background: rgba(246,250,247,.86) !important; box-shadow: 0 4px 14px rgba(39,72,56,.12); backdrop-filter: blur(12px); }
+.vehicle-marker { position: relative; display: grid; place-items: center; width: 38px; height: 30px; border: 3px solid #fff; border-radius: 999px 999px 999px 5px; color: #fff; background: #417fca; box-shadow: 0 6px 16px rgba(29,61,97,.3); font-size: 9px; font-weight: 800; }
+.vehicle-marker-current { background: #3e9b68; box-shadow: 0 6px 16px rgba(30,75,52,.32); }
+.vehicle-marker::after { content: ''; position: absolute; right: 4px; bottom: 4px; width: 5px; height: 5px; border-radius: 50%; background: #fff; }
 .map-placeholder { display: grid; place-content: center; overflow: hidden; color: #678277; text-align: center; background-color: #dce6df; background-image: linear-gradient(28deg, transparent 46%, rgba(255,255,255,.92) 47%, rgba(255,255,255,.92) 51%, transparent 52%), linear-gradient(117deg, transparent 43%, rgba(255,255,255,.82) 44%, rgba(255,255,255,.82) 48%, transparent 49%), linear-gradient(8deg, transparent 61%, rgba(193,211,198,.9) 62%, rgba(193,211,198,.9) 66%, transparent 67%), linear-gradient(155deg, transparent 26%, rgba(193,211,198,.65) 27%, rgba(193,211,198,.65) 30%, transparent 31%); background-size: 280px 220px, 340px 290px, 410px 270px, 520px 360px; }
 .map-placeholder > span { position: relative; z-index: 1; color: rgba(54, 88, 73, .48); font-size: clamp(28px, 7vw, 68px); font-weight: 850; letter-spacing: -.09em; }
 .map-placeholder > span span { color: #3e8b65; }
@@ -48,6 +53,17 @@ h1 { margin: 0; color: #17221f; font-size: clamp(21px, 5vw, 28px); letter-spacin
 .last-seen { align-self: end; margin-left: auto; color: #91a199; font-size: 10px; }
 .speed-danger { color: #c85b43 !important; }
 .speed-alert { margin: -2px 0 13px; padding: 10px 12px; border-radius: 11px; color: #8d3e30; background: #ffe3dc; font-size: 12px; font-weight: 750; }
+.trip-setup { display: grid; gap: 9px; margin-top: 15px; padding-top: 14px; border-top: 1px solid #dfe8e1; }
+.trip-actions { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 7px; }
+.trip-input { min-width: 0; border: 1px solid #d5e1d8; border-radius: 10px; padding: 9px 10px; color: #244b37; background: #fff; font-size: 11px; outline: none; }
+.trip-input:focus { border-color: #4ca56e; box-shadow: 0 0 0 3px rgba(76,165,110,.14); }
+.trip-code-input { min-width: 0; }
+.trip-button { border: 0; border-radius: 10px; padding: 9px 11px; color: #f7fff4; background: #39794b; cursor: pointer; font-size: 11px; font-weight: 750; white-space: nowrap; }
+.trip-button:disabled { cursor: wait; opacity: .55; }
+.trip-button-soft { color: #39794b; background: #e2f1e6; }
+.trip-room { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 15px; padding-top: 14px; border-top: 1px solid #dfe8e1; color: #7b8c84; font-size: 10px; }
+.trip-room strong { color: #39794b; font-size: 9px; font-weight: 650; }
+.trip-error { margin: 0; color: #a34d3b; font-size: 10px; }
 .settings-panel { margin-top: 16px; padding-top: 15px; border-top: 1px solid #dfe8e1; }
 .settings-panel label { color: #466056; font-size: 11px; }
 .range-row { margin-top: 9px; }

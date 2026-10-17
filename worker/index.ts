@@ -11,6 +11,8 @@ type LocationMessage = {
 export class TripRoom implements DurableObject {
   private readonly ctx: DurableObjectState;
   private readonly env: Env;
+  // shortcut: snapshot is in-memory for the PoC; use DO storage for durable presence later.
+  private readonly latestLocations = new Map<string, LocationMessage>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     this.ctx = ctx;
@@ -24,6 +26,7 @@ export class TripRoom implements DurableObject {
 
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1]);
+    for (const location of this.latestLocations.values()) pair[1].send(JSON.stringify(location));
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
@@ -36,6 +39,8 @@ export class TripRoom implements DurableObject {
       return;
     }
     if (!isLocationMessage(parsed)) return;
+
+    this.latestLocations.set(parsed.memberId, parsed);
 
     await this.env.DB.prepare(
       'INSERT INTO location_events (trip_id, member_id, latitude, longitude, accuracy, speed_kmh, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
