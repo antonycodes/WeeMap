@@ -453,12 +453,12 @@ export default function App() {
       const color = getVehicleColor(id);
       let marker = markers.current.get(id);
       if (!marker) {
-        marker = new Marker({ element: createVehicleMarker(isCurrent, id, displayName, color) }).setLngLat([location.longitude, location.latitude]).addTo(map);
+        marker = new Marker({ element: createVehicleMarker(isCurrent, id, displayName, color), anchor: 'bottom' }).setLngLat([location.longitude, location.latitude]).addTo(map);
         markers.current.set(id, marker);
       } else {
         marker.setLngLat([location.longitude, location.latitude]);
       }
-      updateVehicleMarker(marker.getElement(), isCurrent, displayName, color, location.speedKmh);
+      updateVehicleMarker(marker.getElement(), displayName, color, location.speedKmh);
     }
     for (const [id, marker] of markers.current) {
       if (!activeIds.has(id)) {
@@ -491,7 +491,7 @@ export default function App() {
 
         <header className="map-toolbar">
           <div className="brand-lockup"><span className="brand-dot" /> <strong>WeeMap</strong><span className="trip-label">{tripId ? 'Đang theo đoàn' : 'Bản đồ nhóm'}</span></div>
-          <button className="round-button" type="button" aria-label={panelOpen ? 'Đóng thiết lập chuyến đi' : 'Mở thiết lập chuyến đi'} onClick={() => setPanelOpen((open) => !open)}>⚙︎</button>
+          <button className="round-button" type="button" aria-label={panelOpen ? 'Đóng thiết lập chuyến đi' : 'Mở thiết lập chuyến đi'} onClick={() => setPanelOpen((open) => !open)}><img src="/icons/settings.png" alt="" /></button>
         </header>
 
         {updateAvailable && (
@@ -551,12 +551,19 @@ function createVehicleMarker(isCurrent: boolean, memberId: string, displayName: 
   element.setAttribute('role', 'img');
   element.setAttribute('aria-label', isCurrent ? `Vị trí của ${displayName}` : displayName);
   element.dataset.label = displayName;
+  const label = document.createElement('span');
+  label.className = 'vehicle-marker-label';
+  const pin = document.createElement('span');
+  pin.className = 'vehicle-pin';
+  pin.setAttribute('aria-hidden', 'true');
+  element.append(label, pin);
   return element;
 }
 
-function updateVehicleMarker(element: HTMLElement, isCurrent: boolean, displayName: string, color: string, speedKmh?: number): void {
+function updateVehicleMarker(element: HTMLElement, displayName: string, color: string, speedKmh?: number): void {
   element.style.setProperty('--vehicle-color', color);
-  element.textContent = isCurrent ? 'Bạn' : displayName;
+  const label = element.querySelector<HTMLElement>('.vehicle-marker-label');
+  if (label) label.textContent = displayName;
   element.title = `${displayName} · ${speedKmh === undefined ? '—' : `${Math.round(speedKmh)} km/h`}`;
 }
 
