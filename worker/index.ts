@@ -35,8 +35,6 @@ const APP_ORIGINS = new Set(['https://weemap.antony.codes', 'https://weemap.verc
 export class TripRoom implements DurableObject {
   private readonly ctx: DurableObjectState;
   private readonly env: Env;
-  // shortcut: snapshot is in-memory for the PoC; use DO storage for durable presence later.
-  private readonly latestLocations = new Map<string, LocationMessage>();
 
   constructor(ctx: DurableObjectState, env: Env) {
     this.ctx = ctx;
@@ -48,9 +46,31 @@ export class TripRoom implements DurableObject {
       return json({ error: 'WebSocket required' }, 426);
     }
 
+    // shortcut: query trip history on connect; add a latest-location table if the event log grows.
+    const locations = await this.env.DB.prepare(
+      `SELECT e.member_id, m.display_name, e.latitude, e.longitude, e.accuracy, e.speed_kmh, e.recorded_at
+       FROM location_events AS e
+       JOIN (
+         SELECT member_id, MAX(id) AS id FROM location_events WHERE trip_id = ? GROUP BY member_id
+       ) AS latest ON latest.id = e.id
+       JOIN trip_members AS m ON m.trip_id = e.trip_id AND m.member_id = e.member_id
+       WHERE e.trip_id = ?`,
+    ).bind(this.ctx.id.name ?? 'unknown', this.ctx.id.name ?? 'unknown')
+      .all<{ member_id: string; display_name: string; latitude: number; longitude: number; accuracy: number | null; speed_kmh: number | null; recorded_at: string }>();
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1]);
-    for (const location of this.latestLocations.values()) pair[1].send(JSON.stringify(location));
+    for (const row of locations.results) {
+      pair[1].send(JSON.stringify({
+        type: 'location',
+        memberId: row.member_id,
+        displayName: row.display_name,
+        latitude: row.latitude,
+        longitude: row.longitude,
+        ...(row.accuracy === null ? {} : { accuracy: row.accuracy }),
+        ...(row.speed_kmh === null ? {} : { speedKmh: row.speed_kmh }),
+        recordedAt: row.recorded_at,
+      }));
+    }
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
@@ -69,7 +89,6 @@ export class TripRoom implements DurableObject {
       .first<{ display_name: string }>();
     if (!member) return;
     const location = { ...parsed, displayName: member.display_name };
-    this.latestLocations.set(location.memberId, location);
 
     await this.env.DB.prepare(
       'INSERT INTO location_events (trip_id, member_id, latitude, longitude, accuracy, speed_kmh, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
