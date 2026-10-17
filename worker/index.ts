@@ -1,6 +1,7 @@
 type LocationMessage = {
   type: 'location';
   memberId: string;
+  displayName: string;
   latitude: number;
   longitude: number;
   accuracy?: number;
@@ -42,21 +43,26 @@ export class TripRoom implements DurableObject {
     }
     if (!isLocationMessage(parsed)) return;
 
-    this.latestLocations.set(parsed.memberId, parsed);
+    const member = await this.env.DB.prepare('SELECT display_name FROM trip_members WHERE trip_id = ? AND member_id = ?')
+      .bind(this.ctx.id.name ?? 'unknown', parsed.memberId)
+      .first<{ display_name: string }>();
+    if (!member) return;
+    const location = { ...parsed, displayName: member.display_name };
+    this.latestLocations.set(location.memberId, location);
 
     await this.env.DB.prepare(
       'INSERT INTO location_events (trip_id, member_id, latitude, longitude, accuracy, speed_kmh, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
     ).bind(
       this.ctx.id.name ?? 'unknown',
-      parsed.memberId,
-      parsed.latitude,
-      parsed.longitude,
-      parsed.accuracy ?? null,
-      parsed.speedKmh ?? null,
-      parsed.recordedAt,
+      location.memberId,
+      location.latitude,
+      location.longitude,
+      location.accuracy ?? null,
+      location.speedKmh ?? null,
+      location.recordedAt,
     ).run();
 
-    const payload = JSON.stringify(parsed);
+    const payload = JSON.stringify(location);
     for (const client of this.ctx.getWebSockets()) {
       try {
         client.send(payload);
@@ -92,10 +98,30 @@ export default {
       return json({ id, name, status: 'active' }, 201, request);
     }
 
-    const tripMatch = url.pathname.match(/^\/api\/trips\/([0-9a-f-]{36})$/i);
-    if (tripMatch && request.method === 'GET') {
+    const tripMatch = url.pathname.match(/^\/api\/trips\/([0-9a-f-]{36})(?:\/members)?$/i);
+    if (tripMatch && url.pathname === `/api/trips/${tripMatch[1]}` && request.method === 'GET') {
       const trip = await env.DB.prepare('SELECT id, name, status, created_at FROM trips WHERE id = ?').bind(tripMatch[1]).first();
       return trip ? json(trip, 200, request) : json({ error: 'Trip not found' }, 404, request);
+    }
+
+    if (tripMatch && url.pathname.endsWith('/members') && request.method === 'GET') {
+      const members = await env.DB.prepare('SELECT member_id, display_name, joined_at FROM trip_members WHERE trip_id = ? ORDER BY joined_at ASC')
+        .bind(tripMatch[1])
+        .all();
+      return json({ members: members.results }, 200, request);
+    }
+
+    if (tripMatch && url.pathname.endsWith('/members') && request.method === 'POST') {
+      const body = await readJson(request);
+      const memberId = typeof body?.memberId === 'string' ? body.memberId.trim().slice(0, 80) : '';
+      const displayName = typeof body?.displayName === 'string' ? body.displayName.trim().slice(0, 40) : '';
+      if (!memberId || !displayName) return json({ error: 'Vehicle name is required' }, 400, request);
+      const trip = await env.DB.prepare('SELECT id FROM trips WHERE id = ?').bind(tripMatch[1]).first();
+      if (!trip) return json({ error: 'Trip not found' }, 404, request);
+      await env.DB.prepare(
+        'INSERT INTO trip_members (trip_id, member_id, display_name) VALUES (?, ?, ?) ON CONFLICT(trip_id, member_id) DO UPDATE SET display_name = excluded.display_name',
+      ).bind(tripMatch[1], memberId, displayName).run();
+      return json({ memberId, displayName }, 201, request);
     }
 
     const socketMatch = url.pathname.match(/^\/ws\/([0-9a-f-]{36})$/i);
@@ -164,6 +190,8 @@ function isLocationMessage(value: unknown): value is LocationMessage {
   return item.type === 'location'
     && typeof item.memberId === 'string'
     && item.memberId.length <= 80
+    && typeof item.displayName === 'string'
+    && item.displayName.length <= 40
     && typeof item.latitude === 'number'
     && Number.isFinite(item.latitude)
     && item.latitude >= -90 && item.latitude <= 90

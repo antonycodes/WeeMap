@@ -1,5 +1,6 @@
 export type LiveLocation = {
   memberId: string;
+  displayName?: string;
   latitude: number;
   longitude: number;
   accuracy?: number;
@@ -14,6 +15,7 @@ export function parseLiveLocation(value: unknown): LiveLocation | null {
     item.type !== 'location'
     || typeof item.memberId !== 'string'
     || item.memberId.length > 80
+    || (item.displayName !== undefined && (typeof item.displayName !== 'string' || item.displayName.length > 40))
     || typeof item.latitude !== 'number'
     || !Number.isFinite(item.latitude)
     || item.latitude < -90
@@ -31,6 +33,7 @@ export function parseLiveLocation(value: unknown): LiveLocation | null {
 
   return {
     memberId: item.memberId,
+    displayName: item.displayName,
     latitude: item.latitude,
     longitude: item.longitude,
     accuracy: item.accuracy,
