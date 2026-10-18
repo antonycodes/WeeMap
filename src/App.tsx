@@ -783,7 +783,7 @@ export default function App() {
     const route = routeEstimates && signalCheckAt - routeEstimates.calculatedAt <= 90_000
       ? routeEstimates.routes.find((estimate) => estimate.memberId === id)
       : undefined;
-    return route ? formatRouteEstimate(route) : `${formatDistance(distanceBetweenKm(position, other))} đường thẳng`;
+    return route ? formatRouteEstimate(route) : formatDistance(distanceBetweenKm(position, other));
   };
 
   const nearbyVehicles = vehicleList.filter((vehicle) => vehicle.memberId !== memberId && !vehicle.memberId.startsWith('slot:')).map((vehicle) => {
@@ -831,9 +831,8 @@ export default function App() {
           <button className="map-control refresh-control" type="button" aria-label="Làm mới vị trí" onClick={() => window.location.reload()}><img src="/icons/refresh.png" alt="" /></button>
         </div>
 
-        {tripId && memberReady && !panelOpen && !routeOpen && <section className="convoy-diagram" aria-label="Khoảng cách các xe từ bạn">
-          <h2>Khoảng cách từ bạn</h2>
-          <p>Gần → xa · {diagramUsesRoad ? 'đường ô tô' : 'đường thẳng'}</p>
+        {tripId && memberReady && !panelOpen && !routeOpen && <section className="convoy-diagram" aria-label="Khoảng cách">
+          <h2>Khoảng cách</h2>
           <ol className="convoy-nodes">
             <li className="convoy-node"><strong style={{ backgroundColor: getVehicleColor(memberId) }}>{selectedVehicleCode || 'Xe của bạn'}</strong><span>Bạn</span></li>
             {diagramVehicles.map((vehicle) => <li className="convoy-node" key={vehicle.memberId}><strong style={{ backgroundColor: getVehicleColor(vehicle.memberId) }}>{vehicle.displayName}</strong><span>{vehicle.distance === undefined ? vehicleDistance(vehicle.memberId) : formatDistance(vehicle.distance)}</span></li>)}
