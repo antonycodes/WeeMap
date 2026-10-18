@@ -20,6 +20,11 @@ type LocationMessage = {
   recordedAt: string;
 };
 
+type VoiceJoinMessage = { type: 'voice-join'; memberId: string; memberToken: string };
+type VoiceSignalMessage = { type: 'voice-signal'; memberId: string; memberToken: string; targetId: string; signal: Record<string, unknown> };
+type VoiceStateMessage = { type: 'voice-state'; memberId: string; memberToken: string; speaking: boolean };
+type VoiceAttachment = { memberId: string };
+
 async function hashLeaderPassword(password: string, salt: Uint8Array<ArrayBuffer>): Promise<string> {
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
   const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: 100_000 }, key, 256);
@@ -192,6 +197,18 @@ export class TripRoom implements DurableObject {
     } catch {
       return;
     }
+    if (isVoiceJoinMessage(parsed)) {
+      await this.joinVoice(_socket, parsed);
+      return;
+    }
+    if (isVoiceSignalMessage(parsed)) {
+      await this.relayVoiceSignal(_socket, parsed);
+      return;
+    }
+    if (isVoiceStateMessage(parsed)) {
+      await this.relayVoiceState(_socket, parsed);
+      return;
+    }
     if (!isLocationMessage(parsed)) return;
 
     const member = await this.env.DB.prepare('SELECT display_name FROM trip_members WHERE trip_id = ? AND member_id = ?')
@@ -220,7 +237,58 @@ export class TripRoom implements DurableObject {
     }
   }
 
+  private async joinVoice(socket: WebSocket, message: VoiceJoinMessage): Promise<void> {
+    if (!await this.authorizeVoiceMember(message.memberId, message.memberToken)) return;
+    socket.serializeAttachment({ memberId: message.memberId } satisfies VoiceAttachment);
+    for (const client of this.ctx.getWebSockets()) {
+      const attachment = client.deserializeAttachment() as VoiceAttachment | null;
+      if (!attachment || attachment.memberId === message.memberId) continue;
+      this.sendVoice(client, { type: 'voice-peer', memberId: attachment.memberId, online: true });
+      this.sendVoice(socket, { type: 'voice-peer', memberId: attachment.memberId, online: true });
+    }
+  }
+
+  private async relayVoiceSignal(socket: WebSocket, message: VoiceSignalMessage): Promise<void> {
+    if (!this.isAttachedMember(socket, message.memberId) || !await this.authorizeVoiceMember(message.memberId, message.memberToken)) return;
+    for (const client of this.ctx.getWebSockets()) {
+      const attachment = client.deserializeAttachment() as VoiceAttachment | null;
+      if (attachment?.memberId === message.targetId) {
+        this.sendVoice(client, { type: 'voice-signal', memberId: message.memberId, signal: message.signal });
+        return;
+      }
+    }
+  }
+
+  private async relayVoiceState(socket: WebSocket, message: VoiceStateMessage): Promise<void> {
+    if (!this.isAttachedMember(socket, message.memberId) || !await this.authorizeVoiceMember(message.memberId, message.memberToken)) return;
+    for (const client of this.ctx.getWebSockets()) this.sendVoice(client, { type: 'voice-state', memberId: message.memberId, speaking: message.speaking });
+  }
+
+  private async authorizeVoiceMember(memberId: string, memberToken: string): Promise<boolean> {
+    if (!memberId || memberId.length > 80 || !memberToken || memberToken.length > 128) return false;
+    const member = await this.env.DB.prepare('SELECT member_token FROM trip_members WHERE trip_id = ? AND member_id = ?')
+      .bind(this.ctx.id.name ?? 'unknown', memberId)
+      .first<{ member_token: string | null }>();
+    return Boolean(member?.member_token && equalHash(member.member_token, memberToken));
+  }
+
+  private isAttachedMember(socket: WebSocket, memberId: string): boolean {
+    return (socket.deserializeAttachment() as VoiceAttachment | null)?.memberId === memberId;
+  }
+
+  private sendVoice(socket: WebSocket, message: Record<string, unknown>): void {
+    try {
+      socket.send(JSON.stringify(message));
+    } catch {
+      socket.close(1011, 'send failed');
+    }
+  }
+
   webSocketClose(socket: WebSocket): void {
+    const memberId = (socket.deserializeAttachment() as VoiceAttachment | null)?.memberId;
+    if (memberId) {
+      for (const client of this.ctx.getWebSockets()) this.sendVoice(client, { type: 'voice-peer', memberId, online: false });
+    }
     socket.close();
   }
 
@@ -577,6 +645,33 @@ function isLocationMessage(value: unknown): value is LocationMessage {
     && item.recordedAt.length <= 40
     && (item.accuracy === undefined || (typeof item.accuracy === 'number' && Number.isFinite(item.accuracy) && item.accuracy >= 0))
     && (item.speedKmh === undefined || (typeof item.speedKmh === 'number' && Number.isFinite(item.speedKmh) && item.speedKmh >= 0));
+}
+
+function isVoiceJoinMessage(value: unknown): value is VoiceJoinMessage {
+  if (!value || typeof value !== 'object') return false;
+  const item = value as Partial<VoiceJoinMessage>;
+  return item.type === 'voice-join'
+    && typeof item.memberId === 'string' && item.memberId.length <= 80
+    && typeof item.memberToken === 'string' && item.memberToken.length <= 128;
+}
+
+function isVoiceSignalMessage(value: unknown): value is VoiceSignalMessage {
+  if (!value || typeof value !== 'object') return false;
+  const item = value as Partial<VoiceSignalMessage>;
+  return item.type === 'voice-signal'
+    && typeof item.memberId === 'string' && item.memberId.length <= 80
+    && typeof item.memberToken === 'string' && item.memberToken.length <= 128
+    && typeof item.targetId === 'string' && item.targetId.length <= 80
+    && typeof item.signal === 'object' && item.signal !== null;
+}
+
+function isVoiceStateMessage(value: unknown): value is VoiceStateMessage {
+  if (!value || typeof value !== 'object') return false;
+  const item = value as Partial<VoiceStateMessage>;
+  return item.type === 'voice-state'
+    && typeof item.memberId === 'string' && item.memberId.length <= 80
+    && typeof item.memberToken === 'string' && item.memberToken.length <= 128
+    && typeof item.speaking === 'boolean';
 }
 
 async function loadTripLocations(env: RoutingEnv, tripId: string): Promise<LocationMessage[]> {

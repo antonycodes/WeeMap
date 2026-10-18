@@ -14,6 +14,7 @@ import { hasValidVehicleSet, isValidVehicleCode, parseVehicleCodes } from './lib
 import { BrowserQRCodeReader } from '@zxing/browser';
 import { formatRouteEstimate, parseRouteEstimates, type RouteEstimates } from './lib/routeEstimate';
 import { parseSharedRouteState } from './lib/routeState';
+import { VoiceRoom, type VoiceRoomStatus } from './lib/voiceRoom';
 
 type CheckState = 'ok' | 'pending' | 'blocked';
 type Position = { latitude: number; longitude: number; accuracy: number; speed: number | null; timestamp: number };
@@ -76,9 +77,13 @@ export default function App() {
   const [tripSlots, setTripSlots] = useState<TripSlot[]>([]);
   const [signalCheckAt, setSignalCheckAt] = useState(() => Date.now());
   const [routeEstimates, setRouteEstimates] = useState<RouteEstimates | null>(null);
+  const [voiceStatus, setVoiceStatus] = useState<VoiceRoomStatus>('idle');
+  const [voiceError, setVoiceError] = useState('');
+  const [speakingMembers, setSpeakingMembers] = useState<Record<string, boolean>>({});
   const wakeLock = useRef<WakeLockSentinel | null>(null);
   const watchId = useRef<number | null>(null);
   const socket = useRef<WebSocket | null>(null);
+  const voiceRoom = useRef<VoiceRoom | null>(null);
   const mapInstance = useRef<MapLibreMap | null>(null);
   const fittedRoute = useRef<PlannedRoute | null>(null);
   const markers = useRef<Map<string, Marker>>(new Map());
@@ -766,6 +771,18 @@ export default function App() {
   useEffect(() => {
     if (!tripId || !memberReady) return;
     const socketOrigin = workerOrigin.replace(/^http/, 'ws');
+    const room = new VoiceRoom({
+      memberId,
+      getMemberToken: () => localStorage.getItem(`weemap-member-token:${tripId}`) ?? '',
+      onStatus: (status, errorMessage) => {
+        setVoiceStatus(status);
+        setVoiceError(errorMessage ?? '');
+      },
+      onSpeaking: (speakingMemberId, speaking) => {
+        setSpeakingMembers((previous) => ({ ...previous, [speakingMemberId]: speaking }));
+      },
+    });
+    voiceRoom.current = room;
     let active = true;
     let reconnectTimer: number | undefined;
     let reconnectAttempt = 0;
@@ -776,12 +793,14 @@ export default function App() {
         if (!active) return;
         reconnectAttempt = 0;
         setServerState('ok');
+        room.attachSocket(nextSocket);
         const position = latestPosition.current;
         if (position) sendPosition(nextSocket, memberId, selectedVehicleCode, position, latestSpeed.current);
       });
       nextSocket.addEventListener('message', (event) => {
         try {
           const message = JSON.parse(event.data) as unknown;
+          room.handleMessage(message);
           const sharedRoute = parseSharedRouteState(message);
           if (sharedRoute) {
             setRouteTarget(sharedRoute.target);
@@ -813,6 +832,10 @@ export default function App() {
       if (reconnectTimer !== undefined) window.clearTimeout(reconnectTimer);
       socket.current?.close();
       socket.current = null;
+      room.dispose();
+      voiceRoom.current = null;
+      setSpeakingMembers({});
+      setVoiceStatus('idle');
     };
   }, [memberReady, selectedVehicleCode, tripId]);
 
@@ -1046,6 +1069,10 @@ export default function App() {
   const diagramVehicles = nearbyVehicles.map((vehicle) => ({ ...vehicle, distance: diagramUsesRoad ? vehicle.route ? vehicle.route.distanceMeters / 1000 : undefined : vehicle.distance }))
     .sort((a, b) => (a.distance ?? Infinity) - (b.distance ?? Infinity) || a.displayName.localeCompare(b.displayName));
   const gpsHasSignal = gpsState === 'ok' && position !== null && !isLiveLocationStale(new Date(position.timestamp).toISOString(), signalCheckAt);
+  const speakingVehicleNames = Object.entries(speakingMembers)
+    .filter(([id, speaking]) => speaking && id !== memberId)
+    .map(([id]) => roster.find((member) => member.memberId === id)?.displayName ?? `Xe ${id.slice(0, 4)}`)
+    .join(', ');
 
   return (
     <main className="map-shell">
@@ -1060,6 +1087,8 @@ export default function App() {
               <span>{position ? 'Đang định vị' : gpsState === 'blocked' ? 'GPS chưa sẵn sàng' : 'Đang tìm vị trí'}</span>
               {position && <small>± {Math.round(position.accuracy)} m</small>}
               {signalIssueVehicles.length > 0 && <span className="map-signal-warning" role="alert">{signalIssueVehicles.length} xe cần kiểm tra GPS</span>}
+              {speakingVehicleNames && <span className="voice-speaking" role="status">Đang nói: {speakingVehicleNames}</span>}
+              {voiceStatus === 'error' && <span className="map-signal-warning" role="alert">{voiceError || 'Bộ đàm chưa sẵn sàng'}</span>}
             </div>
             <a className="map-attribution" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap contributors</a>
             {updateAvailable && (
@@ -1078,6 +1107,21 @@ export default function App() {
           <button className="map-control locate-control" type="button" aria-label="Toàn cảnh và từng vị trí" disabled={!navigatorPoints.length} onClick={navigateMap}><img src="/icons/navigator.png" alt="" /></button>
           <button className="map-control gps-signal-control" type="button" aria-label={`GPS Signal: ${gpsHasSignal ? 'có tín hiệu' : 'mất tín hiệu'}`} title="GPS Signal" disabled={gpsRefreshing} onClick={refreshGps}><img src={gpsHasSignal ? '/icons/gps-signal-active.png' : '/icons/gps-signal-lost.png'} alt="" /></button>
           <button className="map-control route-control" type="button" aria-label="Lập lộ trình" aria-expanded={routeOpen} onClick={() => { setRouteOpen((open) => !open); setPanelOpen(false); }}><img src="/icons/route.png" alt="" /></button>
+          {tripId && memberReady && <button
+            className={`map-control voice-control${voiceStatus === 'speaking' ? ' voice-control-active' : ''}`}
+            type="button"
+            aria-label="Giữ để nói với các xe trong chuyến"
+            title={voiceStatus === 'speaking' ? 'Đang nói' : 'Giữ để nói'}
+            aria-pressed={voiceStatus === 'speaking'}
+            onPointerDown={(event) => { event.preventDefault(); void voiceRoom.current?.startTalking(); }}
+            onPointerUp={() => voiceRoom.current?.stopTalking()}
+            onPointerCancel={() => voiceRoom.current?.stopTalking()}
+            onPointerLeave={() => voiceRoom.current?.stopTalking()}
+            onKeyDown={(event) => { if ((event.key === ' ' || event.key === 'Enter') && !event.repeat) { event.preventDefault(); void voiceRoom.current?.startTalking(); } }}
+            onKeyUp={(event) => { if (event.key === ' ' || event.key === 'Enter') voiceRoom.current?.stopTalking(); }}
+            onBlur={() => voiceRoom.current?.stopTalking()}
+            onContextMenu={(event) => event.preventDefault()}
+          ><img src="/icons/voice.png" alt="" /></button>}
           <button className="map-control refresh-control" type="button" aria-label="Làm mới vị trí" onClick={() => window.location.reload()}><img src="/icons/refresh.png" alt="" /></button>
         </div>
 
