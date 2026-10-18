@@ -3,6 +3,7 @@ import { isCoordinates } from '../src/lib/plannedRoute';
 import { googleIdentity } from './googleAuth';
 import { calculateRouteMatrix, routesFromMatrix, type RouteMatrix } from './routing';
 import { isLiveLocationStale } from '../src/lib/liveLocation';
+import { parseSharedRouteState, type SharedRouteState } from '../src/lib/routeState';
 
 interface RoutingEnv extends Env { ORS_API_KEY?: string }
 
@@ -51,8 +52,10 @@ export class TripRoom implements DurableObject {
   }
 
   async fetch(request: Request): Promise<Response> {
-    if (request.method === 'POST' && new URL(request.url).pathname === '/api/directions') return this.directions(request);
-    if (request.method === 'POST' && new URL(request.url).pathname.endsWith('/routes')) return this.routeEstimates(request);
+    const pathname = new URL(request.url).pathname;
+    if (request.method === 'POST' && pathname === '/api/directions') return this.directions(request);
+    if (request.method === 'POST' && pathname.endsWith('/route-state')) return this.routeState(request);
+    if (request.method === 'POST' && pathname.endsWith('/routes')) return this.routeEstimates(request);
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
       return json({ error: 'WebSocket required' }, 426);
     }
@@ -61,7 +64,39 @@ export class TripRoom implements DurableObject {
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1]);
     for (const location of locations) pair[1].send(JSON.stringify(location));
+    const routeState = await this.ctx.storage.get<SharedRouteState>('routeState');
+    if (routeState) pair[1].send(JSON.stringify({ type: 'route-state', ...routeState }));
     return new Response(null, { status: 101, webSocket: pair[0] });
+  }
+
+  private async routeState(request: Request): Promise<Response> {
+    const body = await readJson(request);
+    const routeState = parseSharedRouteState({ started: true, target: body?.target });
+    if (!routeState) return json({ error: 'Điểm đến không hợp lệ.' }, 400, request);
+    const tripId = this.ctx.id.name ?? 'unknown';
+    const owner = await this.env.DB.prepare('SELECT leader_google_sub, leader_password_salt, leader_password_hash FROM trips WHERE id = ?')
+      .bind(tripId)
+      .first<{ leader_google_sub: string | null; leader_password_salt: string | null; leader_password_hash: string | null }>();
+    if (!owner) return json({ error: 'Trip not found' }, 404, request);
+    if (owner.leader_google_sub) {
+      const identity = await googleIdentity(request);
+      if (identity?.sub !== owner.leader_google_sub) return json({ error: 'Chỉ trưởng đoàn mới được bắt đầu lộ trình.' }, 403, request);
+    } else {
+      const password = typeof body?.leaderPassword === 'string' ? body.leaderPassword : '';
+      if (!owner.leader_password_salt || !owner.leader_password_hash) return json({ error: 'Leader password is not configured for this trip' }, 409, request);
+      const salt = Uint8Array.from(owner.leader_password_salt.match(/.{2}/g) ?? [], (byte) => Number.parseInt(byte, 16));
+      if (!equalHash(await hashLeaderPassword(password, salt), owner.leader_password_hash)) return json({ error: 'Chỉ trưởng đoàn mới được bắt đầu lộ trình.' }, 403, request);
+    }
+    await this.ctx.storage.put('routeState', routeState);
+    const payload = JSON.stringify({ type: 'route-state', ...routeState });
+    for (const client of this.ctx.getWebSockets()) {
+      try {
+        client.send(payload);
+      } catch {
+        client.close(1011, 'send failed');
+      }
+    }
+    return json({ ok: true }, 200, request);
   }
 
   private async directions(request: Request): Promise<Response> {
@@ -222,8 +257,11 @@ export default {
       return json({ id, name, status: 'active', memberToken }, 201, request);
     }
 
-    const tripMatch = url.pathname.match(/^\/api\/trips\/([A-Za-z0-9_-]{4,64})(?:\/(members|leader|routes))?$/);
+    const tripMatch = url.pathname.match(/^\/api\/trips\/([A-Za-z0-9_-]{4,64})(?:\/(members|leader|routes|route-state))?$/);
     if (tripMatch && url.pathname.endsWith('/routes') && request.method === 'POST') {
+      return env.TRIP_ROOM.get(env.TRIP_ROOM.idFromName(tripMatch[1])).fetch(request);
+    }
+    if (tripMatch && url.pathname.endsWith('/route-state') && request.method === 'POST') {
       return env.TRIP_ROOM.get(env.TRIP_ROOM.idFromName(tripMatch[1])).fetch(request);
     }
 

@@ -13,6 +13,7 @@ import { extractTripCode, isValidTripCode } from './lib/tripCode';
 import { hasValidVehicleSet, parseVehicleCodes } from './lib/vehicleSlots';
 import { BrowserQRCodeReader } from '@zxing/browser';
 import { formatRouteEstimate, parseRouteEstimates, type RouteEstimates } from './lib/routeEstimate';
+import { parseSharedRouteState } from './lib/routeState';
 
 type CheckState = 'ok' | 'pending' | 'blocked';
 type Position = { latitude: number; longitude: number; accuracy: number; speed: number | null; timestamp: number };
@@ -183,6 +184,26 @@ export default function App() {
     await requestRoute(position, routeTarget, true, true);
   };
 
+  const startRoute = async () => {
+    if (!routeTarget) return;
+    if (!tripId) {
+      setRouteStarted(true);
+      return;
+    }
+    if (!leaderUnlocked) return;
+    try {
+      const response = await fetch(`${workerOrigin}/api/trips/${tripId}/route-state`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...(googleToken ? { Authorization: `Bearer ${googleToken}` } : {}) },
+        body: JSON.stringify({ target: routeTarget, leaderPassword: googleToken ? undefined : leaderPassword }),
+      });
+      if (!response.ok) throw new Error('Không thể bắt đầu lộ trình cho cả đoàn.');
+      setRouteStarted(true);
+    } catch (error) {
+      setRouteError(error instanceof Error ? error.message : 'Không thể bắt đầu lộ trình.');
+    }
+  };
+
   useEffect(() => () => {
     routeRequest.current?.abort();
     fittedRoute.current = null;
@@ -195,6 +216,11 @@ export default function App() {
     lastRerouteAt.current = now;
     void requestRoute(position, routeTarget, false, false);
   }, [plannedRoute, position, requestRoute, routeBusy, routeProgress, routeStarted, routeTarget]);
+
+  useEffect(() => {
+    if (!tripId || !routeStarted || !routeTarget || plannedRoute || !position || routeBusy) return;
+    void requestRoute(position, routeTarget, false, false);
+  }, [plannedRoute, position, requestRoute, routeBusy, routeStarted, routeTarget, tripId]);
 
   const registerMember = async (id: string, vehicleCode: string) => {
     const tokenKey = `weemap-member-token:${id}`;
@@ -621,7 +647,14 @@ export default function App() {
       });
       nextSocket.addEventListener('message', (event) => {
         try {
-          const location = parseLiveLocation(JSON.parse(event.data) as unknown);
+          const message = JSON.parse(event.data) as unknown;
+          const sharedRoute = parseSharedRouteState(message);
+          if (sharedRoute) {
+            setRouteTarget(sharedRoute.target);
+            setRouteStarted(sharedRoute.started);
+            return;
+          }
+          const location = parseLiveLocation(message);
           if (location) {
             setMembers((previous) => ({ ...previous, [location.memberId]: location }));
             setRoster((previous) => previous.some((member) => member.memberId === location.memberId)
@@ -878,6 +911,7 @@ export default function App() {
           <ol className="convoy-nodes">
             <li className="convoy-node"><strong style={{ backgroundColor: getVehicleColor(memberId) }}>{selectedVehicleCode || 'Xe của bạn'}</strong><span>Bạn</span></li>
             {diagramVehicles.map((vehicle) => <li className="convoy-node" key={vehicle.memberId}><strong style={{ backgroundColor: getVehicleColor(vehicle.memberId) }}>{vehicle.displayName}</strong><span>{vehicle.distance === undefined ? vehicleDistance(vehicle.memberId) : formatDistance(vehicle.distance)}</span></li>)}
+            {routeStarted && routeTarget && <li className="convoy-node" key="destination"><strong style={{ backgroundColor: '#f52450' }}>Đích đến</strong><span>{routeProgress ? formatDistance(routeProgress.remainingDistanceMeters / 1000) : 'Chờ GPS'}</span></li>}
           </ol>
         </section>}
 
@@ -894,7 +928,7 @@ export default function App() {
             {(routeTarget || plannedRoute) && <button className="trip-button trip-button-soft" type="button" onClick={clearPlannedRoute}>Xóa lộ trình</button>}
           </form>
         </section>}
-        {plannedRoute && !panelOpen && !routeOpen && <div className="route-summary" role="status"><strong>{!routeStarted ? 'Sẵn sàng bắt đầu' : routeProgress?.offRoute ? 'Đang tính lại tuyến…' : `${formatDistance((routeProgress?.remainingDistanceMeters ?? plannedRoute.distanceMeters) / 1000)} còn lại · khoảng ${Math.max(1, Math.ceil((plannedRoute.durationSeconds * (routeProgress?.remainingDistanceMeters ?? plannedRoute.distanceMeters)) / Math.max(1, plannedRoute.distanceMeters) / 60))} phút`}</strong><span>{routeProgress?.offRoute && routeStarted ? 'Bạn đang lệch tuyến' : 'Đường ô tô · openrouteservice · © OpenStreetMap'}</span>{!routeStarted && <button className="trip-button" type="button" onClick={() => setRouteStarted(true)}>Bắt đầu đi</button>}<button className="trip-button trip-button-soft" type="button" onClick={clearPlannedRoute}>Xóa</button></div>}
+        {plannedRoute && !panelOpen && !routeOpen && <div className="route-summary" role="status"><strong>{!routeStarted ? 'Sẵn sàng bắt đầu' : routeProgress?.offRoute ? 'Đang tính lại tuyến…' : `${formatDistance((routeProgress?.remainingDistanceMeters ?? plannedRoute.distanceMeters) / 1000)} còn lại · khoảng ${Math.max(1, Math.ceil((plannedRoute.durationSeconds * (routeProgress?.remainingDistanceMeters ?? plannedRoute.distanceMeters)) / Math.max(1, plannedRoute.distanceMeters) / 60))} phút`}</strong><span>{routeProgress?.offRoute && routeStarted ? 'Bạn đang lệch tuyến' : 'Đường ô tô · openrouteservice · © OpenStreetMap'}</span>{!routeStarted && (!tripId || leaderUnlocked) && <button className="trip-button" type="button" onClick={() => void startRoute()}>Bắt đầu đi</button>}<button className="trip-button trip-button-soft" type="button" onClick={clearPlannedRoute}>Xóa</button></div>}
 
         {panelOpen && <div className="map-sheet" role="dialog" aria-label="Thiết lập chuyến đi">
           <div className="sheet-heading"><div><span className="eyebrow">CHUYẾN ĐI</span><h1>{tripId ? tripInfo?.name ?? 'Đoàn xe đang chạy' : setupMode === 'create' ? 'Tạo chuyến mới' : setupMode === 'join' ? 'Tham gia chuyến' : 'Hôm nay bạn muốn đi đâu ?'}</h1></div>{serverState === 'ok' && <span className="connection-pill connection-ok">Trực tuyến</span>}</div>
