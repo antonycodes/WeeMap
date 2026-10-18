@@ -284,12 +284,92 @@ export default {
       return json({ id, name, status: 'active', memberToken }, 201, request);
     }
 
-    const tripMatch = url.pathname.match(/^\/api\/trips\/([A-Za-z0-9_-]{4,64})(?:\/(members|leader|routes|route-state))?$/);
+    const tripMatch = url.pathname.match(/^\/api\/trips\/([A-Za-z0-9_-]{4,64})(?:\/(members|leader|routes|route-state|slots))?$/);
     if (tripMatch && url.pathname.endsWith('/routes') && request.method === 'POST') {
       return env.TRIP_ROOM.get(env.TRIP_ROOM.idFromName(tripMatch[1])).fetch(request);
     }
     if (tripMatch && url.pathname.endsWith('/route-state') && request.method === 'POST') {
       return env.TRIP_ROOM.get(env.TRIP_ROOM.idFromName(tripMatch[1])).fetch(request);
+    }
+
+    if (tripMatch && url.pathname.endsWith('/slots') && request.method === 'POST') {
+      const body = await readJson(request);
+      const slotCode = typeof body?.slotCode === 'string' ? normalizeVehicleCode(body.slotCode) : '';
+      if (!VEHICLE_CODE.test(slotCode)) return json({ error: 'Mã xe không hợp lệ.' }, 400, request);
+      const tripId = tripMatch[1];
+      const owner = await env.DB.prepare('SELECT leader_google_sub, leader_password_salt, leader_password_hash FROM trips WHERE id = ?')
+        .bind(tripId)
+        .first<{ leader_google_sub: string | null; leader_password_salt: string | null; leader_password_hash: string | null }>();
+      if (!owner) return json({ error: 'Trip not found' }, 404, request);
+      if (owner.leader_google_sub) {
+        const identity = await googleIdentity(request);
+        if (identity?.sub !== owner.leader_google_sub) return json({ error: 'Chỉ trưởng đoàn mới được chỉnh sửa chuyến đi.' }, 403, request);
+      } else {
+        const password = typeof body?.leaderPassword === 'string' ? body.leaderPassword : '';
+        if (!owner.leader_password_salt || !owner.leader_password_hash) return json({ error: 'Leader password is not configured for this trip' }, 409, request);
+        const salt = Uint8Array.from(owner.leader_password_salt.match(/.{2}/g) ?? [], (byte) => Number.parseInt(byte, 16));
+        if (!equalHash(await hashLeaderPassword(password, salt), owner.leader_password_hash)) return json({ error: 'Chỉ trưởng đoàn mới được chỉnh sửa chuyến đi.' }, 403, request);
+      }
+      const count = await env.DB.prepare('SELECT COUNT(*) AS count FROM trip_slots WHERE trip_id = ?').bind(tripId).first<{ count: number }>();
+      if ((count?.count ?? 0) >= MAX_VEHICLES) return json({ error: `Đoàn chỉ được tối đa ${MAX_VEHICLES} xe.` }, 409, request);
+      const result = await env.DB.prepare('INSERT OR IGNORE INTO trip_slots (trip_id, slot_code) VALUES (?, ?)').bind(tripId, slotCode).run();
+      if (!result.meta.changes) return json({ error: 'Mã xe đã tồn tại trong chuyến đi.' }, 409, request);
+      return json({ code: slotCode, memberId: null, claimed: false }, 201, request);
+    }
+
+    if (tripMatch && url.pathname.endsWith('/slots') && request.method === 'PATCH') {
+      const body = await readJson(request);
+      const fromCode = typeof body?.fromCode === 'string' ? normalizeVehicleCode(body.fromCode) : '';
+      const toCode = typeof body?.toCode === 'string' ? normalizeVehicleCode(body.toCode) : '';
+      if (!VEHICLE_CODE.test(fromCode) || !VEHICLE_CODE.test(toCode) || fromCode === toCode) return json({ error: 'Mã xe mới không hợp lệ.' }, 400, request);
+      const tripId = tripMatch[1];
+      const owner = await env.DB.prepare('SELECT leader_google_sub, leader_password_salt, leader_password_hash FROM trips WHERE id = ?')
+        .bind(tripId)
+        .first<{ leader_google_sub: string | null; leader_password_salt: string | null; leader_password_hash: string | null }>();
+      if (!owner) return json({ error: 'Trip not found' }, 404, request);
+      if (owner.leader_google_sub) {
+        const identity = await googleIdentity(request);
+        if (identity?.sub !== owner.leader_google_sub) return json({ error: 'Chỉ trưởng đoàn mới được chỉnh sửa chuyến đi.' }, 403, request);
+      } else {
+        const password = typeof body?.leaderPassword === 'string' ? body.leaderPassword : '';
+        if (!owner.leader_password_salt || !owner.leader_password_hash) return json({ error: 'Leader password is not configured for this trip' }, 409, request);
+        const salt = Uint8Array.from(owner.leader_password_salt.match(/.{2}/g) ?? [], (byte) => Number.parseInt(byte, 16));
+        if (!equalHash(await hashLeaderPassword(password, salt), owner.leader_password_hash)) return json({ error: 'Chỉ trưởng đoàn mới được chỉnh sửa chuyến đi.' }, 403, request);
+      }
+      const source = await env.DB.prepare('SELECT member_id FROM trip_slots WHERE trip_id = ? AND slot_code = ?')
+        .bind(tripId, fromCode)
+        .first<{ member_id: string | null }>();
+      if (!source) return json({ error: 'Không tìm thấy mã xe cần đổi.' }, 404, request);
+      const target = await env.DB.prepare('SELECT 1 AS found FROM trip_slots WHERE trip_id = ? AND slot_code = ?')
+        .bind(tripId, toCode)
+        .first();
+      if (target) return json({ error: 'Mã xe mới đã tồn tại.' }, 409, request);
+      const statements = [env.DB.prepare('UPDATE trip_slots SET slot_code = ? WHERE trip_id = ? AND slot_code = ?').bind(toCode, tripId, fromCode)];
+      if (source.member_id) statements.push(env.DB.prepare('UPDATE trip_members SET display_name = ? WHERE trip_id = ? AND member_id = ?').bind(toCode, tripId, source.member_id));
+      await env.DB.batch(statements);
+      return json({ previousCode: fromCode, code: toCode, memberId: source.member_id }, 200, request);
+    }
+
+    if (tripMatch && url.pathname === `/api/trips/${tripMatch[1]}` && request.method === 'PATCH') {
+      const body = await readJson(request);
+      const name = typeof body?.name === 'string' ? body.name.trim().slice(0, 80) : '';
+      if (!name) return json({ error: 'Tên chuyến đi không được để trống.' }, 400, request);
+      const tripId = tripMatch[1];
+      const owner = await env.DB.prepare('SELECT leader_google_sub, leader_password_salt, leader_password_hash FROM trips WHERE id = ?')
+        .bind(tripId)
+        .first<{ leader_google_sub: string | null; leader_password_salt: string | null; leader_password_hash: string | null }>();
+      if (!owner) return json({ error: 'Trip not found' }, 404, request);
+      if (owner.leader_google_sub) {
+        const identity = await googleIdentity(request);
+        if (identity?.sub !== owner.leader_google_sub) return json({ error: 'Chỉ trưởng đoàn mới được chỉnh sửa chuyến đi.' }, 403, request);
+      } else {
+        const password = typeof body?.leaderPassword === 'string' ? body.leaderPassword : '';
+        if (!owner.leader_password_salt || !owner.leader_password_hash) return json({ error: 'Leader password is not configured for this trip' }, 409, request);
+        const salt = Uint8Array.from(owner.leader_password_salt.match(/.{2}/g) ?? [], (byte) => Number.parseInt(byte, 16));
+        if (!equalHash(await hashLeaderPassword(password, salt), owner.leader_password_hash)) return json({ error: 'Chỉ trưởng đoàn mới được chỉnh sửa chuyến đi.' }, 403, request);
+      }
+      await env.DB.prepare('UPDATE trips SET name = ? WHERE id = ?').bind(name, tripId).run();
+      return json({ id: tripId, name }, 200, request);
     }
 
     if (tripMatch && url.pathname === `/api/trips/${tripMatch[1]}` && request.method === 'GET') {

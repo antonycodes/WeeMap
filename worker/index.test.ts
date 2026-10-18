@@ -64,3 +64,62 @@ describe('trip member removal authorization', () => {
     expect(batch).not.toHaveBeenCalled();
   });
 });
+
+async function addVehicle(body: Record<string, string>) {
+  const insert = vi.fn().mockResolvedValue({ meta: { changes: 1 } });
+  const env = {
+    DB: {
+      prepare: (sql: string) => ({
+        bind: () => ({
+          first: async () => sql.includes('COUNT(*)')
+            ? { count: 1 }
+            : { leader_google_sub: null, leader_password_salt: '07'.repeat(16), leader_password_hash: passwordHash },
+          run: insert,
+        }),
+      }),
+    },
+  } as unknown as Parameters<typeof worker.fetch>[1];
+  const response = await worker.fetch(new Request('https://example.com/api/trips/TEST/slots', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  }), env);
+  return { response, insert };
+}
+
+describe('trip vehicle slot management', () => {
+  it('lets the leader add a vehicle slot', async () => {
+    const { response, insert } = await addVehicle({ slotCode: 'XE-03', leaderPassword: password });
+    expect(response.status).toBe(201);
+    expect(await response.json()).toMatchObject({ code: 'XE-03', claimed: false });
+    expect(insert).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a vehicle slot change with the wrong leader password', async () => {
+    const { response, insert } = await addVehicle({ slotCode: 'XE-03', leaderPassword: 'wrong-password' });
+    expect(response.status).toBe(403);
+    expect(insert).not.toHaveBeenCalled();
+  });
+});
+
+it('lets the leader rename a trip', async () => {
+  const update = vi.fn().mockResolvedValue({ meta: { changes: 1 } });
+  const env = {
+    DB: {
+      prepare: (sql: string) => ({
+        bind: () => ({
+          first: async () => ({ leader_google_sub: null, leader_password_salt: '07'.repeat(16), leader_password_hash: passwordHash }),
+          run: update,
+        }),
+      }),
+    },
+  } as unknown as Parameters<typeof worker.fetch>[1];
+  const response = await worker.fetch(new Request('https://example.com/api/trips/TEST', {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ name: 'Chuyến mới', leaderPassword: password }),
+  }), env);
+  expect(response.status).toBe(200);
+  expect(await response.json()).toMatchObject({ name: 'Chuyến mới' });
+  expect(update).toHaveBeenCalledOnce();
+});

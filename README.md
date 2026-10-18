@@ -64,6 +64,8 @@ The Worker verifies Google signatures, audience, issuer, expiration, and verifie
 Trip ownership uses Google's stable `sub`, never a browser-supplied email.
 Google ID tokens stay in sessionStorage and expire; sign in again when requested.
 Existing trips retain their existing device credential. They are not reassigned automatically.
+The leader can add vehicle slots from the trip panel after signing in.
+The leader can also rename the trip and change a vehicle code from that panel.
 
 Before deploying this version, apply `db/migrations/0004_google_leader.sql` to D1.
 Add these JavaScript origins to the configured Google web OAuth client:
