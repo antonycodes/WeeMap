@@ -1073,6 +1073,11 @@ export default function App() {
     .filter(([id, speaking]) => speaking && id !== memberId)
     .map(([id]) => roster.find((member) => member.memberId === id)?.displayName ?? `Xe ${id.slice(0, 4)}`)
     .join(', ');
+  const ownVoiceCall = voiceStatus === 'requesting' || voiceStatus === 'speaking';
+  const voiceCallActive = ownVoiceCall || Boolean(speakingVehicleNames);
+  const voiceCallerName = ownVoiceCall ? (selectedVehicleCode || 'Xe của bạn') : speakingVehicleNames;
+  const voiceBannerTitle = voiceStatus === 'requesting' ? 'Đang kết nối bộ đàm' : ownVoiceCall ? 'Bạn đang gọi' : 'Đang gọi đến đoàn';
+  const voiceBannerHint = voiceStatus === 'requesting' ? 'đang mở micro' : ownVoiceCall ? 'giữ nút để nói' : 'đang nghe';
 
   return (
     <main className="map-shell">
@@ -1100,6 +1105,16 @@ export default function App() {
           </div>
           <button className="round-button" type="button" aria-label={panelOpen ? 'Đóng thiết lập chuyến đi' : 'Mở thiết lập chuyến đi'} onClick={() => { setPanelOpen((open) => !open); setSetupMode(null); setTripError(null); setRouteOpen(false); }}><img src="/icons/settings.png" alt="" /></button>
         </header>
+
+        {tripId && memberReady && voiceCallActive && <section className="voice-banner" role="status" aria-live="assertive" aria-label={`Cuộc gọi từ ${voiceCallerName}`}>
+          <img src="/icons/voice.png" alt="" />
+          <div className="voice-banner-copy">
+            <span>{voiceBannerTitle}</span>
+            <strong>{voiceCallerName}</strong>
+            <small>Âm thanh trực tiếp · {voiceBannerHint}</small>
+          </div>
+          <span className="voice-banner-live" aria-hidden="true" />
+        </section>}
 
         <div className={`map-controls${panelOpen || routeOpen ? '' : ' map-controls-full'}`} aria-label="Điều khiển bản đồ">
           <button className="map-control" type="button" aria-label="Phóng to" onClick={() => { const nextZoom = Math.min(20, mapZoom + 1); setMapZoom(nextZoom); mapInstance.current?.setZoom(nextZoom); }}>+</button>
