@@ -1076,8 +1076,8 @@ export default function App() {
   const ownVoiceCall = voiceStatus === 'requesting' || voiceStatus === 'speaking';
   const voiceCallActive = ownVoiceCall || Boolean(speakingVehicleNames);
   const voiceCallerName = ownVoiceCall ? (selectedVehicleCode || 'Xe của bạn') : speakingVehicleNames;
-  const voiceBannerTitle = voiceStatus === 'requesting' ? 'Đang kết nối bộ đàm' : ownVoiceCall ? 'Bạn đang gọi' : 'Đang gọi đến đoàn';
-  const voiceBannerHint = voiceStatus === 'requesting' ? 'đang mở micro' : ownVoiceCall ? 'giữ nút để nói' : 'đang nghe';
+  const voiceBannerTitle = voiceStatus === 'requesting' ? 'Đang kết nối bộ đàm' : ownVoiceCall ? 'Bạn đang gọi' : 'Xe đang gọi';
+  const voiceBannerHint = voiceStatus === 'requesting' ? 'đang mở micro' : ownVoiceCall ? 'bấm để kết thúc' : 'đang nghe';
 
   return (
     <main className="map-shell">
@@ -1113,7 +1113,9 @@ export default function App() {
             <strong>{voiceCallerName}</strong>
             <small>Âm thanh trực tiếp · {voiceBannerHint}</small>
           </div>
+          <div className="voice-waveform" role="img" aria-label="Đang truyền âm thanh"><i /><i /><i /><i /><i /><i /><i /></div>
           <span className="voice-banner-live" aria-hidden="true" />
+          {!ownVoiceCall && <button className="voice-banner-action" type="button" onClick={() => voiceRoom.current?.resumeAudio()}>Bật âm thanh</button>}
         </section>}
 
         <div className={`map-controls${panelOpen || routeOpen ? '' : ' map-controls-full'}`} aria-label="Điều khiển bản đồ">
@@ -1123,19 +1125,12 @@ export default function App() {
           <button className="map-control gps-signal-control" type="button" aria-label={`GPS Signal: ${gpsHasSignal ? 'có tín hiệu' : 'mất tín hiệu'}`} title="GPS Signal" disabled={gpsRefreshing} onClick={refreshGps}><img src={gpsHasSignal ? '/icons/gps-signal-active.png' : '/icons/gps-signal-lost.png'} alt="" /></button>
           <button className="map-control route-control" type="button" aria-label="Lập lộ trình" aria-expanded={routeOpen} onClick={() => { setRouteOpen((open) => !open); setPanelOpen(false); }}><img src="/icons/route.png" alt="" /></button>
           {tripId && memberReady && <button
-            className={`map-control voice-control${voiceStatus === 'speaking' ? ' voice-control-active' : ''}`}
+            className={`map-control voice-control${voiceStatus === 'speaking' || voiceStatus === 'requesting' ? ' voice-control-active' : ''}`}
             type="button"
-            aria-label="Giữ để nói với các xe trong chuyến"
-            title={voiceStatus === 'speaking' ? 'Đang nói' : 'Giữ để nói'}
-            aria-pressed={voiceStatus === 'speaking'}
-            onPointerDown={(event) => { event.preventDefault(); void voiceRoom.current?.startTalking(); }}
-            onPointerUp={() => voiceRoom.current?.stopTalking()}
-            onPointerCancel={() => voiceRoom.current?.stopTalking()}
-            onPointerLeave={() => voiceRoom.current?.stopTalking()}
-            onKeyDown={(event) => { if ((event.key === ' ' || event.key === 'Enter') && !event.repeat) { event.preventDefault(); void voiceRoom.current?.startTalking(); } }}
-            onKeyUp={(event) => { if (event.key === ' ' || event.key === 'Enter') voiceRoom.current?.stopTalking(); }}
-            onBlur={() => voiceRoom.current?.stopTalking()}
-            onContextMenu={(event) => event.preventDefault()}
+            aria-label={voiceStatus === 'speaking' ? 'Kết thúc cuộc gọi' : 'Bắt đầu cuộc gọi với các xe trong chuyến'}
+            title={voiceStatus === 'speaking' ? 'Kết thúc cuộc gọi' : 'Bắt đầu cuộc gọi'}
+            aria-pressed={voiceStatus === 'speaking' || voiceStatus === 'requesting'}
+            onClick={() => void voiceRoom.current?.toggleTalking()}
           ><img src="/icons/voice.png" alt="" /></button>}
           <button className="map-control refresh-control" type="button" aria-label="Làm mới vị trí" onClick={() => window.location.reload()}><img src="/icons/refresh.png" alt="" /></button>
         </div>

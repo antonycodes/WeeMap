@@ -48,13 +48,24 @@ button { -webkit-tap-highlight-color: transparent; }
 .voice-control { color: #39794b; font-size: 20px; touch-action: none; user-select: none; }
 .voice-control img { width: 28px; height: 28px; border-radius: 9px; object-fit: contain; }
 .voice-control-active { color: #fff; background: #c15d48; box-shadow: 0 0 0 5px rgba(193,93,72,.18), 0 8px 24px rgba(39,72,56,.18); }
-.voice-banner { position: absolute; z-index: 3; top: max(160px, calc(env(safe-area-inset-top) + 145px)); right: 16px; left: 16px; display: flex; align-items: center; gap: 10px; min-height: 68px; padding: 10px 14px 10px 10px; border: 1px solid rgba(255,255,255,.88); border-radius: 16px; background: rgba(246,250,247,.94); box-shadow: 0 12px 28px rgba(39,72,56,.2); backdrop-filter: blur(18px); }
-.voice-banner > img { width: 42px; height: 42px; flex: 0 0 auto; border-radius: 12px; object-fit: contain; }
-.voice-banner-copy { display: grid; min-width: 0; gap: 2px; }
+.voice-banner { position: absolute; z-index: 4; top: 50%; left: 50%; display: grid; justify-items: center; width: min(360px, calc(100% - 32px)); gap: 10px; padding: 22px 20px 18px; border: 1px solid rgba(255,255,255,.9); border-radius: 24px; background: rgba(246,250,247,.96); box-shadow: 0 18px 48px rgba(39,72,56,.24); backdrop-filter: blur(20px); text-align: center; transform: translate(-50%, -50%); }
+.voice-banner > img { width: 64px; height: 64px; flex: 0 0 auto; border-radius: 18px; object-fit: contain; }
+.voice-banner-copy { display: grid; min-width: 0; gap: 3px; }
 .voice-banner-copy span { color: #39794b; font-size: 9px; font-weight: 850; letter-spacing: .12em; text-transform: uppercase; }
 .voice-banner-copy strong { overflow: hidden; color: #17221f; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
 .voice-banner-copy small { overflow: hidden; color: #789085; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
-.voice-banner-live { width: 9px; height: 9px; flex: 0 0 auto; margin-left: auto; border-radius: 50%; background: #c15d48; box-shadow: 0 0 0 5px rgba(193,93,72,.14); }
+.voice-waveform { display: flex; align-items: center; justify-content: center; gap: 4px; height: 34px; }
+.voice-waveform i { display: block; width: 4px; height: 10px; border-radius: 999px; background: #39794b; animation: voice-wave 820ms ease-in-out infinite alternate; }
+.voice-waveform i:nth-child(2) { height: 22px; animation-delay: -180ms; }
+.voice-waveform i:nth-child(3) { height: 15px; animation-delay: -360ms; }
+.voice-waveform i:nth-child(4) { height: 28px; animation-delay: -540ms; }
+.voice-waveform i:nth-child(5) { height: 18px; animation-delay: -240ms; }
+.voice-waveform i:nth-child(6) { height: 24px; animation-delay: -420ms; }
+.voice-waveform i:nth-child(7) { height: 11px; animation-delay: -620ms; }
+.voice-banner-live { position: absolute; top: 18px; right: 18px; width: 9px; height: 9px; border-radius: 50%; background: #c15d48; box-shadow: 0 0 0 5px rgba(193,93,72,.14); }
+.voice-banner-action { border: 0; border-radius: 999px; padding: 9px 16px; color: #39794b; background: #e2f1e6; cursor: pointer; font-size: 11px; font-weight: 800; }
+@keyframes voice-wave { from { transform: scaleY(.55); opacity: .55; } to { transform: scaleY(1.08); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .voice-waveform i { animation: none; } }
 .update-banner { max-width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 10px 12px 10px 14px; border: 1px solid #8fbd76; border-radius: 14px; color: #244528; background: rgba(226,244,214,.94); box-shadow: 0 12px 28px rgba(52,92,46,.16); backdrop-filter: blur(14px); font-size: 12px; }
 .update-banner button { display: grid; place-items: center; flex-shrink: 0; width: 44px; height: 44px; border: 0; padding: 0; background: transparent; cursor: pointer; }
 .update-banner button img { width: 36px; height: 36px; object-fit: contain; }
@@ -119,7 +130,7 @@ h1 { margin: 0; color: #17221f; font-size: clamp(21px, 5vw, 28px); font-weight: 
 .qr-scanner video { width: 100%; aspect-ratio: 1; border-radius: 14px; background: #17221f; object-fit: cover; }
 .qr-scanner-card p { margin: 0; color: #789085; font-size: 11px; text-align: center; }
 .sheet-footer { margin-top: 17px; padding-top: 12px; border-top: 1px solid #e0e9e2; color: #8b9b93; font-size: 10px; }
-@media (min-width: 700px) { .map-toolbar { right: 28px; left: 28px; } .voice-banner { top: max(145px, calc(env(safe-area-inset-top) + 130px)); left: 28px; width: min(390px, calc(100% - 56px)); } .map-controls { right: 28px; bottom: 254px; } .map-controls-full { bottom: 28px; } .map-sheet { right: 28px; bottom: 28px; left: auto; width: min(430px, calc(100% - 56px)); border-bottom: 1px solid rgba(255,255,255,.78); border-radius: 25px; } }
+@media (min-width: 700px) { .map-toolbar { right: 28px; left: 28px; } .voice-banner { width: min(390px, calc(100% - 56px)); } .map-controls { right: 28px; bottom: 254px; } .map-controls-full { bottom: 28px; } .map-sheet { right: 28px; bottom: 28px; left: auto; width: min(430px, calc(100% - 56px)); border-bottom: 1px solid rgba(255,255,255,.78); border-radius: 25px; } }
 
 .trip-field { display: grid; gap: 6px; min-width: 0; color: #466056; font-size: 11px; }
 .trip-field > span, .vehicle-count-row > label { font-weight: 700; }

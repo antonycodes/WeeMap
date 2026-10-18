@@ -91,6 +91,19 @@ export class VoiceRoom {
     this.send({ type: 'voice-state', memberId: this.memberId, memberToken: this.getMemberToken(), speaking: true });
   }
 
+  async toggleTalking(): Promise<void> {
+    if (this.pressed) this.stopTalking();
+    else await this.startTalking();
+  }
+
+  resumeAudio(): void {
+    this.remoteAudio.forEach((audio) => {
+      audio.muted = false;
+      audio.volume = 1;
+      void audio.play().catch(() => undefined);
+    });
+  }
+
   stopTalking(): void {
     this.pressed = false;
     this.stream?.getAudioTracks().forEach((track) => { track.enabled = false; });
@@ -119,7 +132,7 @@ export class VoiceRoom {
   private async connectTo(memberId: string): Promise<void> {
     const connection = this.ensurePeer(memberId);
     const hasLocalTrack = connection.getSenders().some((sender) => sender.track?.kind === 'audio');
-    if ((this.memberId >= memberId && hasLocalTrack) || connection.signalingState !== 'stable' || this.negotiating.has(memberId)) return;
+    if (!hasLocalTrack || connection.signalingState !== 'stable' || this.negotiating.has(memberId)) return;
     this.negotiating.add(memberId);
     try {
       const offer = await connection.createOffer();
@@ -148,12 +161,17 @@ export class VoiceRoom {
     };
     connection.ontrack = (event) => {
       const audio = this.remoteAudio.get(memberId) ?? document.body.appendChild(Object.assign(document.createElement('audio'), { autoplay: true, playsInline: true }));
+      audio.muted = false;
+      audio.volume = 1;
       audio.srcObject = event.streams[0] ?? new MediaStream([event.track]);
       audio.play().catch(() => { /* Browser may require a prior user gesture. */ });
       this.remoteAudio.set(memberId, audio);
     };
     connection.onconnectionstatechange = () => {
-      if (connection.connectionState === 'failed' || connection.connectionState === 'closed') this.closePeer(memberId);
+      if (connection.connectionState === 'failed') {
+        this.onStatus('error', 'Không kết nối được âm thanh với xe này.');
+        this.closePeer(memberId);
+      } else if (connection.connectionState === 'closed') this.closePeer(memberId);
     };
     return connection;
   }
