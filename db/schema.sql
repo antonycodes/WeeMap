@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS trips (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
+  leader_google_sub TEXT,
   leader_password_salt TEXT,
   leader_password_hash TEXT,
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'ended')),

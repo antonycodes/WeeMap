@@ -56,3 +56,21 @@ Thời gian là ước tính theo tuyến ô tô, chưa tính giao thông trực
 - Chưa đảm bảo GPS khi app chạy nền hoặc màn hình khóa.
 - Chưa có biển báo, giới hạn tốc độ pháp lý hoặc turn-by-turn navigation.
 - Không dùng dữ liệu vị trí thật.
+
+## Google sign-in for trip leaders
+
+Only trip creators sign in with Google. Joining by trip code remains public.
+The Worker verifies Google signatures, audience, issuer, expiration, and verified email.
+Trip ownership uses Google's stable `sub`, never a browser-supplied email.
+Google ID tokens stay in sessionStorage and expire; sign in again when requested.
+Existing trips retain their existing device credential. They are not reassigned automatically.
+
+Before deploying this version, apply `db/migrations/0004_google_leader.sql` to D1.
+Add these JavaScript origins to the configured Google web OAuth client:
+
+- https://weemap.antony.codes
+- https://group-navigation-local.eventnpi2026.workers.dev
+- http://localhost:5173
+
+Use `http://localhost:5173` for local testing, not the numeric loopback address.
+The OAuth client ID is public configuration. No client secret is needed by this flow.

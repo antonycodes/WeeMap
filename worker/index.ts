@@ -1,3 +1,4 @@
+import { googleIdentity } from './googleAuth';
 import { calculateRouteMatrix, routesFromMatrix, type RouteMatrix } from './routing';
 import { isLiveLocationStale } from '../src/lib/liveLocation';
 
@@ -35,7 +36,7 @@ function equalHash(left: string, right: string): boolean {
   return difference === 0;
 }
 
-const APP_ORIGINS = new Set(['https://weemap.antony.codes', 'https://weemap.vercel.app']);
+const APP_ORIGINS = new Set(['https://weemap.antony.codes', 'https://weemap.vercel.app', 'https://group-navigation-local.eventnpi2026.workers.dev', 'http://localhost:5173']);
 
 export class TripRoom implements DurableObject {
   private readonly ctx: DurableObjectState;
@@ -149,17 +150,22 @@ export default {
 
     if (url.pathname === '/api/health') return json({ ok: true, phase: 0 }, 200, request);
 
+    if (url.pathname === '/api/auth/google' && request.method === 'POST') {
+      const identity = await googleIdentity(request);
+      return identity ? json({ name: identity.name, email: identity.email }, 200, request) : json({ error: 'Google sign-in required' }, 401, request);
+    }
+
     if (url.pathname === '/api/trips' && request.method === 'POST') {
+      const identity = await googleIdentity(request);
+      if (!identity) return json({ error: 'Google sign-in required' }, 401, request);
       const body = await readJson(request);
       const name = typeof body?.name === 'string' ? body.name.trim().slice(0, 80) : '';
       const requestedCode = typeof body?.code === 'string' ? normalizeTripCode(body.code) : '';
       const vehicleCodes = normalizeVehicleCodes(body?.vehicleCodes);
       const leaderMemberId = typeof body?.memberId === 'string' ? body.memberId.trim().slice(0, 80) : '';
       const leaderVehicleCode = typeof body?.vehicleCode === 'string' ? normalizeVehicleCode(body.vehicleCode) : '';
-      const leaderPassword = typeof body?.leaderPassword === 'string' ? body.leaderPassword : '';
       if (!name) return json({ error: 'Trip name is required' }, 400, request);
       if (requestedCode && !isValidTripCode(requestedCode)) return json({ error: 'Trip code must use 4-32 letters, numbers, hyphens, or underscores' }, 400, request);
-      if (leaderPassword.length < 8 || leaderPassword.length > 64) return json({ error: 'Leader password must be 8-64 characters' }, 400, request);
       if (!leaderMemberId || !leaderVehicleCode || !vehicleCodes.length || vehicleCodes.length > MAX_VEHICLES || !vehicleCodes.includes(leaderVehicleCode)) {
         return json({ error: 'Vehicle slots are required' }, 400, request);
       }
@@ -167,11 +173,9 @@ export default {
       const existing = await env.DB.prepare('SELECT id FROM trips WHERE id = ?').bind(id).first();
       if (existing) return json({ error: 'Trip code already exists' }, 409, request);
       const claimedAt = new Date().toISOString();
-      const salt = crypto.getRandomValues(new Uint8Array(16));
-      const passwordHash = await hashLeaderPassword(leaderPassword, salt);
       const memberToken = newMemberToken();
       const statements = [
-        env.DB.prepare('INSERT INTO trips (id, name, leader_password_salt, leader_password_hash) VALUES (?, ?, ?, ?)').bind(id, name, hex(salt), passwordHash),
+        env.DB.prepare('INSERT INTO trips (id, name, leader_google_sub) VALUES (?, ?, ?)').bind(id, name, identity.sub),
         ...vehicleCodes.map((slotCode) => env.DB.prepare(
           'INSERT INTO trip_slots (trip_id, slot_code, member_id, claimed_at) VALUES (?, ?, ?, ?)',
         ).bind(id, slotCode, slotCode === leaderVehicleCode ? leaderMemberId : null, slotCode === leaderVehicleCode ? claimedAt : null)),
@@ -187,7 +191,7 @@ export default {
     }
 
     if (tripMatch && url.pathname === `/api/trips/${tripMatch[1]}` && request.method === 'GET') {
-      const trip = await env.DB.prepare('SELECT id, name, status, created_at, leader_password_hash IS NOT NULL AS has_leader_password FROM trips WHERE id = ?').bind(tripMatch[1]).first();
+      const trip = await env.DB.prepare('SELECT id, name, status, created_at, leader_password_hash IS NOT NULL AS has_leader_password, leader_google_sub IS NOT NULL AS has_google_leader FROM trips WHERE id = ?').bind(tripMatch[1]).first();
       if (!trip) return json({ error: 'Trip not found' }, 404, request);
       const slots = await env.DB.prepare('SELECT slot_code, member_id FROM trip_slots WHERE trip_id = ? ORDER BY rowid ASC')
         .bind(tripMatch[1])
@@ -205,6 +209,12 @@ export default {
     if (tripMatch && url.pathname.endsWith('/leader') && request.method === 'POST') {
       const body = await readJson(request);
       const password = typeof body?.password === 'string' ? body.password : '';
+      const owner = await env.DB.prepare('SELECT leader_google_sub FROM trips WHERE id = ?').bind(tripMatch[1]).first<{ leader_google_sub: string | null }>();
+      if (owner?.leader_google_sub) {
+        const identity = await googleIdentity(request);
+        return identity?.sub === owner.leader_google_sub ? json({ leader: true }, 200, request) : json({ error: 'Google account does not own this trip' }, 403, request);
+      }
+
       const trip = await env.DB.prepare('SELECT leader_password_salt, leader_password_hash FROM trips WHERE id = ?')
         .bind(tripMatch[1])
         .first<{ leader_password_salt: string | null; leader_password_hash: string | null }>();
@@ -254,19 +264,25 @@ export default {
       const requesterToken = typeof body?.requesterToken === 'string' ? body.requesterToken : '';
       const password = typeof body?.leaderPassword === 'string' ? body.leaderPassword : '';
       if (!requesterMemberId || !targetMemberId) return json({ error: 'Member id is required' }, 400, request);
-      if (requesterMemberId === targetMemberId && !password) {
+      if (requesterMemberId === targetMemberId && !password && !request.headers.has('Authorization')) {
         const member = await env.DB.prepare('SELECT member_token FROM trip_members WHERE trip_id = ? AND member_id = ?')
           .bind(tripMatch[1], targetMemberId)
           .first<{ member_token: string | null }>();
         if (member?.member_token && requesterToken !== member.member_token) return json({ error: 'This device session is no longer authorized' }, 403, request);
       } else {
-        const trip = await env.DB.prepare('SELECT leader_password_salt, leader_password_hash FROM trips WHERE id = ?')
-          .bind(tripMatch[1])
-          .first<{ leader_password_salt: string | null; leader_password_hash: string | null }>();
-        if (!trip) return json({ error: 'Trip not found' }, 404, request);
-        if (!trip.leader_password_salt || !trip.leader_password_hash) return json({ error: 'Leader password is not configured for this trip' }, 409, request);
-        const salt = Uint8Array.from(trip.leader_password_salt.match(/.{2}/g) ?? [], (byte) => Number.parseInt(byte, 16));
-        if (!equalHash(await hashLeaderPassword(password, salt), trip.leader_password_hash)) return json({ error: 'Leader password required' }, 403, request);
+        const owner = await env.DB.prepare('SELECT leader_google_sub FROM trips WHERE id = ?').bind(tripMatch[1]).first<{ leader_google_sub: string | null }>();
+        if (owner?.leader_google_sub) {
+          const identity = await googleIdentity(request);
+          if (identity?.sub !== owner.leader_google_sub) return json({ error: 'Google account does not own this trip' }, 403, request);
+        } else {
+          const trip = await env.DB.prepare('SELECT leader_password_salt, leader_password_hash FROM trips WHERE id = ?')
+            .bind(tripMatch[1])
+            .first<{ leader_password_salt: string | null; leader_password_hash: string | null }>();
+          if (!trip) return json({ error: 'Trip not found' }, 404, request);
+          if (!trip.leader_password_salt || !trip.leader_password_hash) return json({ error: 'Leader password is not configured for this trip' }, 409, request);
+          const salt = Uint8Array.from(trip.leader_password_salt.match(/.{2}/g) ?? [], (byte) => Number.parseInt(byte, 16));
+          if (!equalHash(await hashLeaderPassword(password, salt), trip.leader_password_hash)) return json({ error: 'Leader password required' }, 403, request);
+        }
       }
       await env.DB.batch([
         env.DB.prepare('UPDATE trip_slots SET member_id = NULL, claimed_at = NULL WHERE trip_id = ? AND member_id = ?').bind(tripMatch[1], targetMemberId),
@@ -292,7 +308,7 @@ function json(value: unknown, status = 200, request?: Request): Response {
 function corsHeaders(request?: Request): HeadersInit {
   const requestOrigin = request?.headers.get('Origin') ?? '';
   return {
-    'access-control-allow-headers': 'content-type',
+    'access-control-allow-headers': 'content-type, authorization',
     'access-control-allow-methods': 'DELETE, GET, POST, OPTIONS',
     'access-control-allow-origin': APP_ORIGINS.has(requestOrigin) ? requestOrigin : 'https://weemap.vercel.app',
     'vary': 'Origin',
