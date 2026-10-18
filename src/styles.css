@@ -48,6 +48,7 @@ button { -webkit-tap-highlight-color: transparent; }
 .voice-control { color: #39794b; font-size: 20px; touch-action: none; user-select: none; }
 .voice-control img { width: 28px; height: 28px; border-radius: 9px; object-fit: contain; }
 .voice-control-active { color: #fff; background: #c15d48; box-shadow: 0 0 0 5px rgba(193,93,72,.18), 0 8px 24px rgba(39,72,56,.18); }
+.voice-control-ringing { color: #39794b; background: #e2f1e6; box-shadow: 0 0 0 5px rgba(54,164,102,.16), 0 8px 24px rgba(39,72,56,.18); animation: voice-ring 980ms ease-in-out infinite; }
 .voice-banner { position: absolute; z-index: 4; top: 50%; left: 50%; display: grid; justify-items: center; width: min(360px, calc(100% - 32px)); gap: 10px; padding: 22px 20px 18px; border: 1px solid rgba(255,255,255,.9); border-radius: 24px; background: rgba(246,250,247,.96); box-shadow: 0 18px 48px rgba(39,72,56,.24); backdrop-filter: blur(20px); text-align: center; transform: translate(-50%, -50%); }
 .voice-banner > img { width: 64px; height: 64px; flex: 0 0 auto; border-radius: 18px; object-fit: contain; }
 .voice-banner-copy { display: grid; min-width: 0; gap: 3px; }
@@ -65,7 +66,8 @@ button { -webkit-tap-highlight-color: transparent; }
 .voice-banner-live { position: absolute; top: 18px; right: 18px; width: 9px; height: 9px; border-radius: 50%; background: #c15d48; box-shadow: 0 0 0 5px rgba(193,93,72,.14); }
 .voice-banner-action { border: 0; border-radius: 999px; padding: 9px 16px; color: #39794b; background: #e2f1e6; cursor: pointer; font-size: 11px; font-weight: 800; }
 @keyframes voice-wave { from { transform: scaleY(.55); opacity: .55; } to { transform: scaleY(1.08); opacity: 1; } }
-@media (prefers-reduced-motion: reduce) { .voice-waveform i { animation: none; } }
+@keyframes voice-ring { 50% { transform: scale(1.05); } }
+@media (prefers-reduced-motion: reduce) { .voice-waveform i, .voice-control-ringing { animation: none; } }
 .update-banner { max-width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 10px 12px 10px 14px; border: 1px solid #8fbd76; border-radius: 14px; color: #244528; background: rgba(226,244,214,.94); box-shadow: 0 12px 28px rgba(52,92,46,.16); backdrop-filter: blur(14px); font-size: 12px; }
 .update-banner button { display: grid; place-items: center; flex-shrink: 0; width: 44px; height: 44px; border: 0; padding: 0; background: transparent; cursor: pointer; }
 .update-banner button img { width: 36px; height: 36px; object-fit: contain; }

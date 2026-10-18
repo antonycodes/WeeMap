@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import worker from './index';
+import worker, { TripRoom } from './index';
 
 const password = 'trip-password';
 const salt = new Uint8Array(16).fill(7);
@@ -122,4 +122,31 @@ it('lets the leader rename a trip', async () => {
   expect(response.status).toBe(200);
   expect(await response.json()).toMatchObject({ name: 'Chuyến mới' });
   expect(update).toHaveBeenCalledOnce();
+});
+
+it('relays an authorized voice call state to every connected vehicle', async () => {
+  const callerSend = vi.fn();
+  const otherSend = vi.fn();
+  const caller = {
+    deserializeAttachment: () => ({ memberId: 'car-1' }),
+    send: callerSend,
+    close: vi.fn(),
+  } as unknown as WebSocket;
+  const other = {
+    deserializeAttachment: () => ({ memberId: 'car-2' }),
+    send: otherSend,
+    close: vi.fn(),
+  } as unknown as WebSocket;
+  const ctx = {
+    id: { name: 'TEST' },
+    getWebSockets: () => [caller, other],
+  } as unknown as ConstructorParameters<typeof TripRoom>[0];
+  const env = {
+    DB: { prepare: () => ({ bind: () => ({ first: async () => ({ member_token: 'valid-token' }) }) }) },
+  } as unknown as ConstructorParameters<typeof TripRoom>[1];
+  const room = new TripRoom(ctx, env);
+
+  await room.webSocketMessage(caller, JSON.stringify({ type: 'voice-call', memberId: 'car-1', memberToken: 'valid-token', active: true }));
+
+  expect(JSON.parse(otherSend.mock.calls[0][0])).toEqual({ type: 'voice-call', memberId: 'car-1', active: true });
 });

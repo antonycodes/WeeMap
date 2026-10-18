@@ -80,6 +80,7 @@ export default function App() {
   const [voiceStatus, setVoiceStatus] = useState<VoiceRoomStatus>('idle');
   const [voiceError, setVoiceError] = useState('');
   const [speakingMembers, setSpeakingMembers] = useState<Record<string, boolean>>({});
+  const [voiceCalls, setVoiceCalls] = useState<Record<string, boolean>>({});
   const wakeLock = useRef<WakeLockSentinel | null>(null);
   const watchId = useRef<number | null>(null);
   const socket = useRef<WebSocket | null>(null);
@@ -781,6 +782,9 @@ export default function App() {
       onSpeaking: (speakingMemberId, speaking) => {
         setSpeakingMembers((previous) => ({ ...previous, [speakingMemberId]: speaking }));
       },
+      onCall: (callingMemberId, active) => {
+        setVoiceCalls((previous) => ({ ...previous, [callingMemberId]: active }));
+      },
     });
     voiceRoom.current = room;
     let active = true;
@@ -835,6 +839,7 @@ export default function App() {
       room.dispose();
       voiceRoom.current = null;
       setSpeakingMembers({});
+      setVoiceCalls({});
       setVoiceStatus('idle');
     };
   }, [memberReady, selectedVehicleCode, tripId]);
@@ -1073,11 +1078,16 @@ export default function App() {
     .filter(([id, speaking]) => speaking && id !== memberId)
     .map(([id]) => roster.find((member) => member.memberId === id)?.displayName ?? `Xe ${id.slice(0, 4)}`)
     .join(', ');
+  const callingVehicleNames = Object.entries(voiceCalls)
+    .filter(([id, active]) => active && id !== memberId)
+    .map(([id]) => roster.find((member) => member.memberId === id)?.displayName ?? `Xe ${id.slice(0, 4)}`)
+    .join(', ');
   const ownVoiceCall = voiceStatus === 'requesting' || voiceStatus === 'speaking';
-  const voiceCallActive = ownVoiceCall || Boolean(speakingVehicleNames);
-  const voiceCallerName = ownVoiceCall ? (selectedVehicleCode || 'Xe của bạn') : speakingVehicleNames;
+  const incomingVoiceCall = Boolean(callingVehicleNames);
+  const voiceCallActive = ownVoiceCall || incomingVoiceCall;
+  const voiceCallerName = ownVoiceCall ? (selectedVehicleCode || 'Xe của bạn') : callingVehicleNames;
   const voiceBannerTitle = voiceStatus === 'requesting' ? 'Đang kết nối bộ đàm' : ownVoiceCall ? 'Bạn đang gọi' : 'Xe đang gọi';
-  const voiceBannerHint = voiceStatus === 'requesting' ? 'đang mở micro' : ownVoiceCall ? 'bấm để kết thúc' : 'đang nghe';
+  const voiceBannerHint = voiceStatus === 'requesting' ? 'đang mở micro' : ownVoiceCall ? 'bấm để kết thúc' : 'chạm để trả lời';
 
   return (
     <main className="map-shell">
@@ -1115,7 +1125,7 @@ export default function App() {
           </div>
           <div className="voice-waveform" role="img" aria-label="Đang truyền âm thanh"><i /><i /><i /><i /><i /><i /><i /></div>
           <span className="voice-banner-live" aria-hidden="true" />
-          {!ownVoiceCall && <button className="voice-banner-action" type="button" onClick={() => voiceRoom.current?.resumeAudio()}>Bật âm thanh</button>}
+          {!ownVoiceCall && <button className="voice-banner-action" type="button" onClick={() => void voiceRoom.current?.toggleTalking()}>Trả lời</button>}
         </section>}
 
         <div className={`map-controls${panelOpen || routeOpen ? '' : ' map-controls-full'}`} aria-label="Điều khiển bản đồ">
@@ -1125,11 +1135,11 @@ export default function App() {
           <button className="map-control gps-signal-control" type="button" aria-label={`GPS Signal: ${gpsHasSignal ? 'có tín hiệu' : 'mất tín hiệu'}`} title="GPS Signal" disabled={gpsRefreshing} onClick={refreshGps}><img src={gpsHasSignal ? '/icons/gps-signal-active.png' : '/icons/gps-signal-lost.png'} alt="" /></button>
           <button className="map-control route-control" type="button" aria-label="Lập lộ trình" aria-expanded={routeOpen} onClick={() => { setRouteOpen((open) => !open); setPanelOpen(false); }}><img src="/icons/route.png" alt="" /></button>
           {tripId && memberReady && <button
-            className={`map-control voice-control${voiceStatus === 'speaking' || voiceStatus === 'requesting' ? ' voice-control-active' : ''}`}
+            className={`map-control voice-control${ownVoiceCall ? ' voice-control-active' : incomingVoiceCall ? ' voice-control-ringing' : ''}`}
             type="button"
-            aria-label={voiceStatus === 'speaking' ? 'Kết thúc cuộc gọi' : 'Bắt đầu cuộc gọi với các xe trong chuyến'}
-            title={voiceStatus === 'speaking' ? 'Kết thúc cuộc gọi' : 'Bắt đầu cuộc gọi'}
-            aria-pressed={voiceStatus === 'speaking' || voiceStatus === 'requesting'}
+            aria-label={ownVoiceCall ? 'Kết thúc cuộc gọi' : incomingVoiceCall ? 'Trả lời cuộc gọi từ xe khác' : 'Bắt đầu cuộc gọi với các xe trong chuyến'}
+            title={ownVoiceCall ? 'Kết thúc cuộc gọi' : incomingVoiceCall ? 'Trả lời cuộc gọi' : 'Bắt đầu cuộc gọi'}
+            aria-pressed={ownVoiceCall || incomingVoiceCall}
             onClick={() => void voiceRoom.current?.toggleTalking()}
           ><img src="/icons/voice.png" alt="" /></button>}
           <button className="map-control refresh-control" type="button" aria-label="Làm mới vị trí" onClick={() => window.location.reload()}><img src="/icons/refresh.png" alt="" /></button>

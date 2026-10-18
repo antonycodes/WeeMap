@@ -23,6 +23,7 @@ type LocationMessage = {
 type VoiceJoinMessage = { type: 'voice-join'; memberId: string; memberToken: string };
 type VoiceSignalMessage = { type: 'voice-signal'; memberId: string; memberToken: string; targetId: string; signal: Record<string, unknown> };
 type VoiceStateMessage = { type: 'voice-state'; memberId: string; memberToken: string; speaking: boolean };
+type VoiceCallMessage = { type: 'voice-call'; memberId: string; memberToken: string; active: boolean };
 type VoiceAttachment = { memberId: string };
 
 async function hashLeaderPassword(password: string, salt: Uint8Array<ArrayBuffer>): Promise<string> {
@@ -52,6 +53,8 @@ export class TripRoom implements DurableObject {
   private readonly ctx: DurableObjectState;
   private readonly env: RoutingEnv;
   private pendingRoutes?: Promise<RouteMatrix>;
+  private readonly activeVoiceCalls = new Set<string>();
+  private readonly voiceCallSockets = new Map<string, WebSocket>();
 
   constructor(ctx: DurableObjectState, env: RoutingEnv) {
     this.ctx = ctx;
@@ -209,6 +212,10 @@ export class TripRoom implements DurableObject {
       await this.relayVoiceState(_socket, parsed);
       return;
     }
+    if (isVoiceCallMessage(parsed)) {
+      await this.relayVoiceCall(_socket, parsed);
+      return;
+    }
     if (!isLocationMessage(parsed)) return;
 
     const member = await this.env.DB.prepare('SELECT display_name FROM trip_members WHERE trip_id = ? AND member_id = ?')
@@ -240,6 +247,10 @@ export class TripRoom implements DurableObject {
   private async joinVoice(socket: WebSocket, message: VoiceJoinMessage): Promise<void> {
     if (!await this.authorizeVoiceMember(message.memberId, message.memberToken)) return;
     socket.serializeAttachment({ memberId: message.memberId } satisfies VoiceAttachment);
+    this.voiceCallSockets.set(message.memberId, socket);
+    for (const memberId of this.activeVoiceCalls) {
+      if (memberId !== message.memberId) this.sendVoice(socket, { type: 'voice-call', memberId, active: true });
+    }
     for (const client of this.ctx.getWebSockets()) {
       const attachment = client.deserializeAttachment() as VoiceAttachment | null;
       if (!attachment || attachment.memberId === message.memberId) continue;
@@ -262,6 +273,13 @@ export class TripRoom implements DurableObject {
   private async relayVoiceState(socket: WebSocket, message: VoiceStateMessage): Promise<void> {
     if (!this.isAttachedMember(socket, message.memberId) || !await this.authorizeVoiceMember(message.memberId, message.memberToken)) return;
     for (const client of this.ctx.getWebSockets()) this.sendVoice(client, { type: 'voice-state', memberId: message.memberId, speaking: message.speaking });
+  }
+
+  private async relayVoiceCall(socket: WebSocket, message: VoiceCallMessage): Promise<void> {
+    if (!this.isAttachedMember(socket, message.memberId) || !await this.authorizeVoiceMember(message.memberId, message.memberToken)) return;
+    if (message.active) this.activeVoiceCalls.add(message.memberId);
+    else this.activeVoiceCalls.delete(message.memberId);
+    for (const client of this.ctx.getWebSockets()) this.sendVoice(client, { type: 'voice-call', memberId: message.memberId, active: message.active });
   }
 
   private async authorizeVoiceMember(memberId: string, memberToken: string): Promise<boolean> {
@@ -287,6 +305,11 @@ export class TripRoom implements DurableObject {
   webSocketClose(socket: WebSocket): void {
     const memberId = (socket.deserializeAttachment() as VoiceAttachment | null)?.memberId;
     if (memberId) {
+      if (this.voiceCallSockets.get(memberId) === socket) {
+        this.voiceCallSockets.delete(memberId);
+        this.activeVoiceCalls.delete(memberId);
+        for (const client of this.ctx.getWebSockets()) this.sendVoice(client, { type: 'voice-call', memberId, active: false });
+      }
       for (const client of this.ctx.getWebSockets()) this.sendVoice(client, { type: 'voice-peer', memberId, online: false });
     }
     socket.close();
@@ -672,6 +695,15 @@ function isVoiceStateMessage(value: unknown): value is VoiceStateMessage {
     && typeof item.memberId === 'string' && item.memberId.length <= 80
     && typeof item.memberToken === 'string' && item.memberToken.length <= 128
     && typeof item.speaking === 'boolean';
+}
+
+function isVoiceCallMessage(value: unknown): value is VoiceCallMessage {
+  if (!value || typeof value !== 'object') return false;
+  const item = value as Partial<VoiceCallMessage>;
+  return item.type === 'voice-call'
+    && typeof item.memberId === 'string' && item.memberId.length <= 80
+    && typeof item.memberToken === 'string' && item.memberToken.length <= 128
+    && typeof item.active === 'boolean';
 }
 
 async function loadTripLocations(env: RoutingEnv, tripId: string): Promise<LocationMessage[]> {

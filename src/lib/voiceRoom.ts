@@ -4,7 +4,8 @@ type VoiceSignal = RTCSessionDescriptionInit | RTCIceCandidateInit;
 type VoiceMessage =
   | { type: 'voice-peer'; memberId: string; online: boolean }
   | { type: 'voice-signal'; memberId: string; signal: VoiceSignal }
-  | { type: 'voice-state'; memberId: string; speaking: boolean };
+  | { type: 'voice-state'; memberId: string; speaking: boolean }
+  | { type: 'voice-call'; memberId: string; active: boolean };
 
 export function isVoiceSignal(value: unknown): value is VoiceSignal {
   if (!value || typeof value !== 'object') return false;
@@ -17,6 +18,7 @@ type VoiceRoomOptions = {
   getMemberToken: () => string;
   onStatus: (status: VoiceRoomStatus, error?: string) => void;
   onSpeaking: (memberId: string, speaking: boolean) => void;
+  onCall: (memberId: string, active: boolean) => void;
 };
 
 export class VoiceRoom {
@@ -24,6 +26,7 @@ export class VoiceRoom {
   private readonly getMemberToken: () => string;
   private readonly onStatus: VoiceRoomOptions['onStatus'];
   private readonly onSpeaking: VoiceRoomOptions['onSpeaking'];
+  private readonly onCall: VoiceRoomOptions['onCall'];
   private socket: WebSocket | null = null;
   private stream: MediaStream | null = null;
   private readonly peers = new Set<string>();
@@ -38,6 +41,7 @@ export class VoiceRoom {
     this.getMemberToken = options.getMemberToken;
     this.onStatus = options.onStatus;
     this.onSpeaking = options.onSpeaking;
+    this.onCall = options.onCall;
   }
 
   attachSocket(socket: WebSocket): void {
@@ -62,6 +66,10 @@ export class VoiceRoom {
       this.onSpeaking(message.memberId, message.speaking === true);
       return;
     }
+    if (message.type === 'voice-call' && typeof message.memberId === 'string' && typeof message.active === 'boolean') {
+      this.onCall(message.memberId, message.active);
+      return;
+    }
     if (message.type === 'voice-signal' && typeof message.memberId === 'string' && isVoiceSignal(message.signal)) {
       void this.handleSignal(message.memberId, message.signal);
     }
@@ -77,6 +85,7 @@ export class VoiceRoom {
           video: false,
         });
         this.stream.getAudioTracks().forEach((track) => { track.enabled = false; });
+        this.send({ type: 'voice-call', memberId: this.memberId, memberToken: this.getMemberToken(), active: true });
         await Promise.all([...this.peers].map((memberId) => this.connectTo(memberId)));
         this.onStatus('ready');
       } catch (error) {
@@ -92,8 +101,12 @@ export class VoiceRoom {
   }
 
   async toggleTalking(): Promise<void> {
-    if (this.pressed) this.stopTalking();
-    else await this.startTalking();
+    if (this.pressed) {
+      this.stopTalking();
+      return;
+    }
+    this.resumeAudio();
+    await this.startTalking();
   }
 
   resumeAudio(): void {
@@ -109,6 +122,7 @@ export class VoiceRoom {
     this.stream?.getAudioTracks().forEach((track) => { track.enabled = false; });
     if (this.socket?.readyState === WebSocket.OPEN) {
       this.send({ type: 'voice-state', memberId: this.memberId, memberToken: this.getMemberToken(), speaking: false });
+      this.send({ type: 'voice-call', memberId: this.memberId, memberToken: this.getMemberToken(), active: false });
     }
     if (this.stream) this.onStatus('ready');
   }
@@ -116,6 +130,7 @@ export class VoiceRoom {
   dispose(): void {
     this.pressed = false;
     this.send({ type: 'voice-state', memberId: this.memberId, memberToken: this.getMemberToken(), speaking: false });
+    this.send({ type: 'voice-call', memberId: this.memberId, memberToken: this.getMemberToken(), active: false });
     this.connections.forEach((connection) => connection.close());
     this.connections.clear();
     this.remoteAudio.forEach((audio) => audio.remove());
