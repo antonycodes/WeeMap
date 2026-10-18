@@ -4,8 +4,10 @@ import { googleIdentity } from './googleAuth';
 import { calculateRouteMatrix, routesFromMatrix, type RouteMatrix } from './routing';
 import { isLiveLocationStale } from '../src/lib/liveLocation';
 import { parseSharedRouteState, type SharedRouteState } from '../src/lib/routeState';
+import { geocodeDestination, GeocodeError } from './geocode';
 
 interface RoutingEnv extends Env { ORS_API_KEY?: string }
+type RoutingQuota = { day: string; total: number; clients: Record<string, { count: number; last: number }> };
 
 type LocationMessage = {
   type: 'location';
@@ -54,6 +56,7 @@ export class TripRoom implements DurableObject {
   async fetch(request: Request): Promise<Response> {
     const pathname = new URL(request.url).pathname;
     if (request.method === 'POST' && pathname === '/api/directions') return this.directions(request);
+    if (request.method === 'POST' && pathname === '/api/geocode') return this.geocode(request);
     if (request.method === 'POST' && pathname.endsWith('/route-state')) return this.routeState(request);
     if (request.method === 'POST' && pathname.endsWith('/routes')) return this.routeEstimates(request);
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
@@ -99,16 +102,28 @@ export class TripRoom implements DurableObject {
     return json({ ok: true }, 200, request);
   }
 
-  private async directions(request: Request): Promise<Response> {
+  private async geocode(request: Request): Promise<Response> {
+    if (!this.env.ORS_API_KEY) return json({ error: 'Chưa cấu hình dịch vụ tìm địa chỉ.' }, 503, request);
     const body = await readJson(request);
-    if (!isCoordinates(body?.start) || !isCoordinates(body?.end)) return json({ error: 'Tọa độ không hợp lệ.' }, 400, request);
-    if (!this.env.ORS_API_KEY) return json({ error: 'Chưa cấu hình dịch vụ lộ trình.' }, 503, request);
+    const text = typeof body?.text === 'string' ? body.text.trim().slice(0, 160) : '';
+    const shortCode = typeof body?.shortCode === 'string' ? body.shortCode.trim().slice(0, 20) : undefined;
+    if (!text) return json({ error: 'Địa chỉ điểm đến không được để trống.' }, 400, request);
+    if (!await this.takeRoutingQuota(request)) return json({ error: 'Đã giới hạn lượt tìm địa chỉ. Thử lại sau.' }, 429, request);
+    try {
+      return json(await geocodeDestination(this.env.ORS_API_KEY, text, shortCode), 200, request);
+    } catch (error) {
+      if (error instanceof GeocodeError) return json({ error: error.message }, error.status, request);
+      if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) return json({ error: 'Dịch vụ tìm địa chỉ phản hồi chậm. Hãy thử lại sau.' }, 504, request);
+      return json({ error: 'Worker chưa kết nối được dịch vụ tìm địa chỉ.' }, 503, request);
+    }
+  }
+
+  private async takeRoutingQuota(request: Request): Promise<boolean> {
     const ipHash = hex(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(request.headers.get('CF-Connecting-IP') ?? 'local'))));
-    type Quota = { day: string; total: number; clients: Record<string, { count: number; last: number }> };
-    const allowed = await this.ctx.storage.transaction(async (storage) => {
+    return this.ctx.storage.transaction(async (storage) => {
       const now = Date.now();
       const day = new Date(now).toISOString().slice(0, 10);
-      let quota = await storage.get<Quota>('directionsQuota');
+      let quota = await storage.get<RoutingQuota>('directionsQuota');
       if (!quota || quota.day !== day) quota = { day, total: 0, clients: {} };
       const client = quota.clients[ipHash] ?? { count: 0, last: 0 };
       if (quota.total >= 600 || client.count >= 60 || now - client.last < 10_000) return false;
@@ -117,7 +132,13 @@ export class TripRoom implements DurableObject {
       await storage.put('directionsQuota', quota);
       return true;
     });
-    if (!allowed) return json({ error: 'Đã giới hạn lượt tính đường. Thử lại sau.' }, 429, request);
+  }
+
+  private async directions(request: Request): Promise<Response> {
+    const body = await readJson(request);
+    if (!isCoordinates(body?.start) || !isCoordinates(body?.end)) return json({ error: 'Tọa độ không hợp lệ.' }, 400, request);
+    if (!this.env.ORS_API_KEY) return json({ error: 'Chưa cấu hình dịch vụ lộ trình.' }, 503, request);
+    if (!await this.takeRoutingQuota(request)) return json({ error: 'Đã giới hạn lượt tính đường. Thử lại sau.' }, 429, request);
     try {
       return json(await calculateDirections(this.env.ORS_API_KEY, body.start, body.end), 200, request);
     } catch (error) {
@@ -213,6 +234,12 @@ export default {
     const url = new URL(request.url);
 
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders(request) });
+
+    if (url.pathname === '/api/geocode' && request.method === 'POST') {
+      const origin = request.headers.get('Origin');
+      if (origin && !APP_ORIGINS.has(origin)) return json({ error: 'Origin not allowed' }, 403, request);
+      return env.TRIP_ROOM.get(env.TRIP_ROOM.idFromName('directions')).fetch(request);
+    }
 
     if (url.pathname === '/api/directions' && request.method === 'POST') {
       const origin = request.headers.get('Origin');

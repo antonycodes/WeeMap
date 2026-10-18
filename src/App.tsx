@@ -1,5 +1,5 @@
 import type { FeatureCollection } from 'geojson';
-import { resolvePlusCode } from './lib/plusCode';
+import { parseDestinationInput, parseDestinationTarget, type DestinationTarget } from './lib/destination';
 import { getRouteProgress, parsePlannedRoute, type PlannedRoute } from './lib/plannedRoute';
 import GoogleSignIn from './GoogleSignIn';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -21,7 +21,7 @@ type TripSlot = { code: string; memberId?: string | null; claimed: boolean };
 type TripInfo = { id: string; name: string; status: string; hasGoogleLeader?: boolean; hasLeaderPassword?: boolean; slots?: TripSlot[] };
 type TripMember = { memberId: string; displayName: string; joinedAt?: string };
 type SignalIssue = TripMember & { issue: 'missing' | 'stale' };
-type RouteTarget = ReturnType<typeof resolvePlusCode>;
+type RouteTarget = DestinationTarget;
 const VEHICLE_COLORS = ['#39794b', '#3f78b5', '#a7652d', '#8a4f9f', '#bd4e65', '#16828a', '#6d6b2f', '#c34f2d'];
 
 const workerOrigin = (import.meta.env.VITE_WORKER_ORIGIN
@@ -175,10 +175,28 @@ export default function App() {
     }
     if (!routeTarget) {
       try {
-        const target = resolvePlusCode(destination, position);
+        const input = parseDestinationInput(destination, position);
+        if (!input) throw new Error('Nhập điểm đến trước khi tìm đường.');
+        let target: RouteTarget | null = 'target' in input ? input.target : null;
+        if (!target) {
+          setRouteBusy(true);
+          const response = await fetch(`${workerOrigin}/api/geocode`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ text: 'geocodeText' in input ? input.geocodeText : '', shortCode: 'shortCode' in input ? input.shortCode : undefined }),
+          });
+          const data: unknown = await response.json().catch(() => null);
+          if (!response.ok) {
+            const message = data && typeof data === 'object' && 'error' in data && typeof data.error === 'string' ? data.error.slice(0, 200) : 'Không tìm thấy điểm đến.';
+            throw new Error(message);
+          }
+          target = parseDestinationTarget(data);
+          if (!target) throw new Error('Dữ liệu điểm đến không hợp lệ.');
+        }
         setRouteTarget(target);
         mapInstance.current?.flyTo({ center: [target.longitude, target.latitude], zoom: 15 });
-      } catch (error) { setRouteError(error instanceof Error ? error.message : 'Plus Code không hợp lệ.'); }
+      } catch (error) { setRouteError(error instanceof Error ? error.message : 'Không xác định được điểm đến.'); }
+      finally { setRouteBusy(false); }
       return;
     }
     await requestRoute(position, routeTarget, true, true);
@@ -861,6 +879,10 @@ export default function App() {
     return route ? formatRouteEstimate(route) : formatDistance(distanceBetweenKm(position, other));
   };
 
+  const focusMap = (latitude: number, longitude: number) => {
+    mapInstance.current?.flyTo({ center: [longitude, latitude], zoom: Math.max(mapZoom, 15) });
+  };
+
   const nearbyVehicles = vehicleList.filter((vehicle) => vehicle.memberId !== memberId && !vehicle.memberId.startsWith('slot:')).map((vehicle) => {
     const location = displayedMembers[vehicle.memberId];
     const fresh = position && location && !isLiveLocationStale(new Date(position.timestamp).toISOString(), signalCheckAt) && !isLiveLocationStale(location.recordedAt, signalCheckAt);
@@ -909,9 +931,9 @@ export default function App() {
         {tripId && memberReady && !panelOpen && !routeOpen && <section className="convoy-diagram" aria-label="Khoảng cách">
           <div className="convoy-heading"><img src="/icons/distance.png" alt="" /><h2>Khoảng cách</h2></div>
           <ol className="convoy-nodes">
-            <li className="convoy-node"><strong style={{ backgroundColor: getVehicleColor(memberId) }}>{selectedVehicleCode || 'Xe của bạn'}</strong><span>Bạn</span></li>
-            {diagramVehicles.map((vehicle) => <li className="convoy-node" key={vehicle.memberId}><strong style={{ backgroundColor: getVehicleColor(vehicle.memberId) }}>{vehicle.displayName}</strong><span>{vehicle.distance === undefined ? vehicleDistance(vehicle.memberId) : formatDistance(vehicle.distance)}</span></li>)}
-            {routeStarted && routeTarget && <li className="convoy-node" key="destination"><strong style={{ backgroundColor: '#f52450' }}>Đích đến</strong><span>{routeProgress ? formatDistance(routeProgress.remainingDistanceMeters / 1000) : 'Chờ GPS'}</span></li>}
+            <li className="convoy-node"><button className="convoy-node-button" type="button" disabled={!position} onClick={() => position && focusMap(position.latitude, position.longitude)}><strong style={{ backgroundColor: getVehicleColor(memberId) }}>{selectedVehicleCode || 'Xe của bạn'}</strong></button><span>Bạn</span></li>
+            {diagramVehicles.map((vehicle) => <li className="convoy-node" key={vehicle.memberId}><button className="convoy-node-button" type="button" disabled={!displayedMembers[vehicle.memberId]} onClick={() => { const location = displayedMembers[vehicle.memberId]; if (location) focusMap(location.latitude, location.longitude); }}><strong style={{ backgroundColor: getVehicleColor(vehicle.memberId) }}>{vehicle.displayName}</strong></button><span>{vehicle.distance === undefined ? vehicleDistance(vehicle.memberId) : formatDistance(vehicle.distance)}</span></li>)}
+            {routeStarted && routeTarget && <li className="convoy-node" key="destination"><button className="convoy-node-button" type="button" onClick={() => focusMap(routeTarget.latitude, routeTarget.longitude)}><strong style={{ backgroundColor: '#f52450' }}>Đích đến</strong></button><span>{routeProgress ? formatDistance(routeProgress.remainingDistanceMeters / 1000) : 'Chờ GPS'}</span></li>}
           </ol>
         </section>}
 
@@ -920,11 +942,11 @@ export default function App() {
           <form className="trip-setup" onSubmit={(event) => { event.preventDefault(); void planRoute(); }}>
             <label className="trip-field"><span>Điểm xuất phát</span><select className="trip-input" aria-label="Điểm xuất phát"><option>Vị trí hiện tại của bạn</option></select></label>
             {!position && <p className="route-note" role="status">Bật quyền vị trí và chờ GPS để chọn điểm xuất phát.</p>}
-            <label className="trip-field"><span>Plus Code điểm đến</span><input className="trip-input" value={destination} maxLength={160} placeholder="Dán Plus Code từ Google Maps" onChange={(event) => { clearPlannedRoute(); setDestination(event.target.value); }} /></label>
-            {routeTarget && <div className="trip-field"><strong>{routeTarget.code}</strong><span>Điểm đến: {routeTarget.latitude.toFixed(5)}, {routeTarget.longitude.toFixed(5)}</span><span>{routeTarget.shortened ? 'Mã rút gọn được xác định gần GPS của bạn. ' : ''}Kiểm tra ghim đỏ trên bản đồ trước khi vẽ đường.</span><button className="trip-button trip-button-soft" type="button" onClick={() => setRouteOpen(false)}>Xem ghim trên bản đồ</button></div>}
+            <label className="trip-field"><span>Điểm đến</span><input className="trip-input" value={destination} maxLength={160} placeholder="Plus Code, tọa độ, địa chỉ hoặc link Google Maps" onChange={(event) => { clearPlannedRoute(); setDestination(event.target.value); }} /></label>
+            {routeTarget && <div className="trip-field"><strong>{routeTarget.label ?? routeTarget.code}</strong><span>Điểm đến: {routeTarget.latitude.toFixed(5)}, {routeTarget.longitude.toFixed(5)}</span><span>{routeTarget.shortened ? 'Mã rút gọn được xác định theo địa phương. ' : ''}Kiểm tra ghim đỏ trên bản đồ trước khi vẽ đường.</span><button className="trip-button trip-button-soft" type="button" onClick={() => setRouteOpen(false)}>Xem ghim trên bản đồ</button></div>}
             {routeError && <p className="trip-error" role="alert">{routeError}</p>}
             <button className="trip-button" type="submit" disabled={routeBusy || !destination.trim() || !position}>{routeBusy ? 'Đang tính đường…' : routeTarget ? 'Vẽ lộ trình' : 'Xem điểm đến'}</button>
-            <p className="route-note">Đường ô tô · thời gian ước tính. Tọa độ xuất phát và điểm đến được gửi tới <a href="https://openrouteservice.org/" target="_blank" rel="noreferrer">openrouteservice</a> để tính đường. © OpenStreetMap contributors.</p>
+            <p className="route-note">Đường ô tô · thời gian ước tính. Dữ liệu điểm đến có thể được gửi tới <a href="https://openrouteservice.org/" target="_blank" rel="noreferrer">openrouteservice</a> để tìm vị trí và tính đường. © OpenStreetMap contributors.</p>
             {(routeTarget || plannedRoute) && <button className="trip-button trip-button-soft" type="button" onClick={clearPlannedRoute}>Xóa lộ trình</button>}
           </form>
         </section>}

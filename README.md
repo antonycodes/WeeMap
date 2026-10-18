@@ -78,9 +78,9 @@ The OAuth client ID is public configuration. No client secret is needed by this 
 ## Route from GPS to a Plus Code
 
 Use the route icon on the map. The departure point is the device's current GPS fix.
-Paste a full Plus Code, preview the destination pin, then request the driving route.
-Bare short codes resolve nearest to current GPS; always confirm the destination pin.
-Short codes with locality text need a full code instead; no geocoder is used.
+The destination accepts a full or short Plus Code, a coordinate pair, a full Google Maps link, or a normal address.
+Short codes with locality text are geocoded before recovery; always confirm the destination pin.
+Address geocoding runs through the Worker, keeping the ORS API key off the client.
 Routing sends the two coordinates to openrouteservice through the Worker.
 The ORS_API_KEY stays on the Worker. Routes are snapshots, without automatic rerouting.
 The public directions endpoint validates coordinates and uses a Durable Object quota:
