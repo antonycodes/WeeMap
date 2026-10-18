@@ -1,6 +1,9 @@
+import type { FeatureCollection } from 'geojson';
+import { resolvePlusCode } from './lib/plusCode';
+import { parsePlannedRoute, type PlannedRoute } from './lib/plannedRoute';
 import GoogleSignIn from './GoogleSignIn';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Map as MapLibreMap, Marker } from 'maplibre-gl';
+import { Map as MapLibreMap, Marker, LngLatBounds, type GeoJSONSource } from 'maplibre-gl';
 import QRCode from 'qrcode';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { getLatestCommit, hasNewerCommit, type BuildInfo } from './lib/appUpdate';
@@ -31,6 +34,12 @@ export default function App() {
   const [mapZoom, setMapZoom] = useState(12);
   const [position, setPosition] = useState<Position | null>(null);
   const [destination, setDestination] = useState('');
+  const [routeOpen, setRouteOpen] = useState(false);
+  const [routeTarget, setRouteTarget] = useState<ReturnType<typeof resolvePlusCode> | null>(null);
+  const [plannedRoute, setPlannedRoute] = useState<PlannedRoute | null>(null);
+  const [routeBusy, setRouteBusy] = useState(false);
+  const [routeError, setRouteError] = useState('');
+  const routeRequest = useRef<AbortController | null>(null);
   const [members, setMembers] = useState<Record<string, LiveLocation>>({});
   const [error, setError] = useState<string | null>(null);
   const [tripInput, setTripInput] = useState('');
@@ -76,9 +85,6 @@ export default function App() {
   const latestSpeed = useRef(currentSpeed);
   latestPosition.current = position;
   latestSpeed.current = currentSpeed;
-  const directionsUrl = position && destination.trim()
-    ? `https://www.google.com/maps/dir/?api=1&origin=${position.latitude},${position.longitude}&destination=${encodeURIComponent(destination.trim())}&travelmode=driving`
-    : undefined;
   const getVehicleColor = (id: string) => {
     const existing = colors.current.get(id);
     if (existing) return existing;
@@ -106,6 +112,54 @@ export default function App() {
     const allowedIds = new Set(roster.map((member) => member.memberId));
     return Object.fromEntries(Object.entries(liveMembers).filter(([id]) => id === memberId || allowedIds.has(id)));
   }, [liveMembers, memberId, roster, tripSlots.length]);
+
+  const clearPlannedRoute = () => {
+    routeRequest.current?.abort();
+    routeRequest.current = null;
+    setRouteBusy(false);
+    setPlannedRoute(null);
+    setRouteTarget(null);
+    setRouteError('');
+  };
+
+  const planRoute = async () => {
+    setRouteError('');
+    if (!position || isLiveLocationStale(new Date(position.timestamp).toISOString())) {
+      setRouteError('Cần GPS mới để chọn điểm xuất phát.');
+      return;
+    }
+    if (!routeTarget) {
+      try {
+        const target = resolvePlusCode(destination, position);
+        setRouteTarget(target);
+        mapInstance.current?.flyTo({ center: [target.longitude, target.latitude], zoom: 15 });
+      } catch (error) { setRouteError(error instanceof Error ? error.message : 'Plus Code không hợp lệ.'); }
+      return;
+    }
+    routeRequest.current?.abort();
+    const controller = new AbortController();
+    routeRequest.current = controller;
+    setRouteBusy(true);
+    setPlannedRoute(null);
+    try {
+      const response = await fetch(`${workerOrigin}/api/directions`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ start: [position.longitude, position.latitude], end: [routeTarget.longitude, routeTarget.latitude] }),
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(response.status === 429 ? 'Đã giới hạn lượt tính đường. Hãy thử lại sau.' : 'Không tìm được lộ trình. Kiểm tra điểm đến hoặc thử lại sau.');
+      const data: unknown = await response.json().catch(() => { throw new Error('Máy chủ chưa trả về lộ trình hợp lệ. Hãy thử lại sau.'); });
+      const route = parsePlannedRoute(data);
+      if (!route) throw new Error('Dữ liệu lộ trình không hợp lệ.');
+      if (!controller.signal.aborted) { setPlannedRoute(route); setRouteOpen(false); }
+    } catch (error) {
+      if (!controller.signal.aborted) setRouteError(error instanceof Error ? error.message : 'Không tải được lộ trình.');
+    } finally {
+      if (routeRequest.current === controller) { routeRequest.current = null; setRouteBusy(false); }
+    }
+  };
+
+  useEffect(() => () => { routeRequest.current?.abort(); }, []);
 
   const registerMember = async (id: string, vehicleCode: string) => {
     const tokenKey = `weemap-member-token:${id}`;
@@ -664,6 +718,36 @@ export default function App() {
     }
   }, [displayedMembers, memberId, roster]);
 
+  useEffect(() => {
+    const map = mapInstance.current;
+    if (!map) return;
+    const marker = routeTarget ? new Marker({ color: '#f52450' }).setLngLat([routeTarget.longitude, routeTarget.latitude]).addTo(map) : undefined;
+    if (marker) marker.getElement().setAttribute('aria-label', 'Điểm đến');
+    return () => { marker?.remove(); };
+  }, [routeTarget]);
+
+  useEffect(() => {
+    const map = mapInstance.current;
+    if (!map) return;
+    const draw = () => {
+      const data: FeatureCollection = { type: 'FeatureCollection', features: plannedRoute ? [{ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: plannedRoute.coordinates } }] : [] };
+      const source = map.getSource('planned-route') as GeoJSONSource | undefined;
+      if (source) source.setData(data);
+      else {
+        map.addSource('planned-route', { type: 'geojson', data });
+        map.addLayer({ id: 'planned-route-outline', type: 'line', source: 'planned-route', layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#ffffff', 'line-width': 8 } });
+        map.addLayer({ id: 'planned-route-line', type: 'line', source: 'planned-route', layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#1677df', 'line-width': 5 } });
+      }
+      if (plannedRoute) {
+        const bounds = plannedRoute.coordinates.reduce((area, point) => area.extend(point), new LngLatBounds(plannedRoute.coordinates[0], plannedRoute.coordinates[0]));
+        map.fitBounds(bounds, { padding: { top: 200, right: 75, bottom: 180, left: 30 }, maxZoom: 16 });
+      }
+    };
+    if (map.isStyleLoaded()) draw();
+    else map.once('load', draw);
+    return () => { map.off('load', draw); };
+  }, [plannedRoute]);
+
   const vehicleList = useMemo(() => {
     if (tripSlots.length) {
       return tripSlots.map((slot) => {
@@ -731,17 +815,18 @@ export default function App() {
               </div>
             )}
           </div>
-          <button className="round-button" type="button" aria-label={panelOpen ? 'Đóng thiết lập chuyến đi' : 'Mở thiết lập chuyến đi'} onClick={() => { setPanelOpen((open) => !open); setSetupMode(null); setTripError(null); }}><img src="/icons/settings.png" alt="" /></button>
+          <button className="round-button" type="button" aria-label={panelOpen ? 'Đóng thiết lập chuyến đi' : 'Mở thiết lập chuyến đi'} onClick={() => { setPanelOpen((open) => !open); setSetupMode(null); setTripError(null); setRouteOpen(false); }}><img src="/icons/settings.png" alt="" /></button>
         </header>
 
-        <div className={`map-controls${panelOpen ? '' : ' map-controls-full'}`} aria-label="Điều khiển bản đồ">
+        <div className={`map-controls${panelOpen || routeOpen ? '' : ' map-controls-full'}`} aria-label="Điều khiển bản đồ">
           <button className="map-control" type="button" aria-label="Phóng to" onClick={() => { const nextZoom = Math.min(20, mapZoom + 1); setMapZoom(nextZoom); mapInstance.current?.setZoom(nextZoom); }}>+</button>
           <button className="map-control" type="button" aria-label="Thu nhỏ" onClick={() => { const nextZoom = Math.max(4, mapZoom - 1); setMapZoom(nextZoom); mapInstance.current?.setZoom(nextZoom); }}>−</button>
           <button className="map-control locate-control" type="button" aria-label="Vị trí hiện tại" disabled={!position} onClick={() => position && mapInstance.current?.flyTo({ center: [position.longitude, position.latitude], zoom: Math.max(mapZoom, 15) })}><img src="/icons/navigator.png" alt="" /></button>
+          <button className="map-control route-control" type="button" aria-label="Lập lộ trình" aria-expanded={routeOpen} onClick={() => { setRouteOpen((open) => !open); setPanelOpen(false); }}><img src="/icons/route.png" alt="" /></button>
           <button className="map-control refresh-control" type="button" aria-label="Làm mới vị trí" onClick={() => window.location.reload()}><img src="/icons/refresh.png" alt="" /></button>
         </div>
 
-        {tripId && memberReady && !panelOpen && <section className="convoy-diagram" aria-label="Khoảng cách các xe từ bạn">
+        {tripId && memberReady && !panelOpen && !routeOpen && <section className="convoy-diagram" aria-label="Khoảng cách các xe từ bạn">
           <h2>Khoảng cách từ bạn</h2>
           <p>Gần → xa · {diagramUsesRoad ? 'đường ô tô' : 'đường thẳng'}</p>
           <ol className="convoy-nodes">
@@ -750,6 +835,21 @@ export default function App() {
           </ol>
         </section>}
 
+        {routeOpen && <section className="map-sheet route-sheet" role="dialog" aria-label="Lập lộ trình">
+          <div className="sheet-heading"><h1>Lập lộ trình</h1><button className="share-close" type="button" aria-label="Đóng lộ trình" onClick={() => setRouteOpen(false)}>×</button></div>
+          <form className="trip-setup" onSubmit={(event) => { event.preventDefault(); void planRoute(); }}>
+            <label className="trip-field"><span>Điểm xuất phát</span><select className="trip-input" aria-label="Điểm xuất phát"><option>Vị trí hiện tại của bạn</option></select></label>
+            {!position && <p className="route-note" role="status">Bật quyền vị trí và chờ GPS để chọn điểm xuất phát.</p>}
+            <label className="trip-field"><span>Plus Code điểm đến</span><input className="trip-input" value={destination} maxLength={160} placeholder="Dán Plus Code từ Google Maps" onChange={(event) => { clearPlannedRoute(); setDestination(event.target.value); }} /></label>
+            {routeTarget && <div className="trip-field"><strong>{routeTarget.code}</strong><span>Điểm đến: {routeTarget.latitude.toFixed(5)}, {routeTarget.longitude.toFixed(5)}</span><span>{routeTarget.shortened ? 'Mã rút gọn được xác định gần GPS của bạn. ' : ''}Kiểm tra ghim đỏ trên bản đồ trước khi vẽ đường.</span><button className="trip-button trip-button-soft" type="button" onClick={() => setRouteOpen(false)}>Xem ghim trên bản đồ</button></div>}
+            {routeError && <p className="trip-error" role="alert">{routeError}</p>}
+            <button className="trip-button" type="submit" disabled={routeBusy || !destination.trim() || !position}>{routeBusy ? 'Đang tính đường…' : routeTarget ? 'Vẽ lộ trình' : 'Xem điểm đến'}</button>
+            <p className="route-note">Đường ô tô · thời gian ước tính. Tọa độ xuất phát và điểm đến được gửi tới <a href="https://openrouteservice.org/" target="_blank" rel="noreferrer">openrouteservice</a> để tính đường. © OpenStreetMap contributors.</p>
+            {(routeTarget || plannedRoute) && <button className="trip-button trip-button-soft" type="button" onClick={clearPlannedRoute}>Xóa lộ trình</button>}
+          </form>
+        </section>}
+        {plannedRoute && !panelOpen && !routeOpen && <div className="route-summary" role="status"><strong>{formatDistance(plannedRoute.distanceMeters / 1000)} · khoảng {Math.max(1, Math.ceil(plannedRoute.durationSeconds / 60))} phút</strong><span>Đường ô tô · openrouteservice · © OpenStreetMap</span><button className="trip-button trip-button-soft" type="button" onClick={clearPlannedRoute}>Xóa</button></div>}
+
         {panelOpen && <div className="map-sheet" role="dialog" aria-label="Thiết lập chuyến đi">
           <div className="sheet-heading"><div><span className="eyebrow">CHUYẾN ĐI</span><h1>{tripId ? tripInfo?.name ?? 'Đoàn xe đang chạy' : setupMode === 'create' ? 'Tạo chuyến mới' : setupMode === 'join' ? 'Tham gia chuyến' : 'Hôm nay bạn muốn đi đâu ?'}</h1></div>{serverState === 'ok' && <span className="connection-pill connection-ok">Trực tuyến</span>}</div>
           {tripId && <><div className="driving-row">
@@ -757,10 +857,7 @@ export default function App() {
             {position && <span className="last-seen">{new Date(position.timestamp).toLocaleTimeString('vi-VN')}</span>}
           </div>
           {signalIssueVehicles.length > 0 && <div className="signal-alert" role="alert"><span className="signal-alert-dot" aria-hidden="true" /><div><strong>GPS xe cần kiểm tra</strong><span>{signalIssueVehicles.map((vehicle) => `${vehicle.displayName} · ${vehicle.issue === 'missing' ? 'chưa có tín hiệu' : 'mất tín hiệu'}`).join('  ·  ')}</span></div></div>}
-          <form className="destination-row" onSubmit={(event) => { event.preventDefault(); if (directionsUrl) window.open(directionsUrl, '_blank', 'noopener,noreferrer'); }}>
-            <input className="trip-input" value={destination} onChange={(event) => setDestination(event.target.value)} aria-label="Điểm đến" placeholder="Nhập địa chỉ hoặc địa điểm cần đến" />
-            <button className="trip-button" type="submit" disabled={!directionsUrl}>Dẫn đường</button>
-          </form></>}
+          </>}
           {!tripId && setupMode && <button className="trip-button trip-button-soft" type="button" onClick={() => { setSetupMode(null); setTripError(null); }}>← Quay lại</button>}
           {tripId ? <><div className="trip-room"><span>Mã đoàn: <strong>{tripId}</strong></span><div className="trip-room-actions"><button className="trip-button trip-button-soft" type="button" onClick={() => setShareOpen(true)}>Chia sẻ</button><button className="trip-button trip-button-danger" type="button" disabled={memberBusy} onClick={() => void leaveTrip()}>Thoát đoàn</button></div></div>{leaderUnlocked && <div className="trip-entry"><strong>Bạn là trưởng đoàn</strong>{googleToken && <button className="trip-button trip-button-soft" type="button" onClick={signOutGoogle}>Đăng xuất Google</button>}</div>}{tripError && <p className="trip-error" role="alert">{tripError}</p>}{!memberReady && <div className="trip-entry"><strong>Chọn mã xe để vào đoàn</strong><div className="trip-entry-row"><select className="trip-input" value={selectedVehicleCode} onChange={(event) => setSelectedVehicleCode(event.target.value)} aria-label="Mã xe"><option value="">Chọn xe</option>{tripSlots.map((slot) => <option key={slot.code} value={slot.code} disabled={slot.claimed && slot.memberId !== memberId}>{slot.code}{slot.claimed ? ' · đã chọn' : ''}</option>)}</select><button className="trip-button" type="button" disabled={memberBusy || !selectedVehicleCode} onClick={() => void enterSharedTrip()}>{memberBusy ? 'Đang vào…' : 'Vào đoàn'}</button></div></div>}{shareOpen && <div className="share-box" role="dialog" aria-label="Chia sẻ chuyến đi"><div className="share-heading"><strong>Mời xe vào đoàn</strong><button type="button" className="share-close" aria-label="Đóng" onClick={() => setShareOpen(false)}>×</button></div>{qrDataUrl ? <img className="share-qr" src={qrDataUrl} alt="Mã QR tham gia WeeMap" /> : <div className="share-qr share-qr-placeholder">Đang tạo QR…</div>}<span className="share-link">{shareUrl}</span><button className="trip-button" type="button" onClick={() => void copyTripLink()}>{shareStatus}</button></div>}<div className="vehicle-list"><div className="vehicle-list-heading"><strong>Xe trong đoàn</strong><span>{vehicleList.length}</span></div>{vehicleList.map((vehicle) => <div className="vehicle-row" key={vehicle.memberId}><span className="vehicle-swatch" style={{ backgroundColor: getVehicleColor(vehicle.memberId) }} /><span className="vehicle-name">{vehicle.displayName}</span><span className="vehicle-distance">{vehicleDistance(vehicle.memberId)}</span><span className="vehicle-state">{vehicle.memberId.startsWith('slot:') ? 'Chưa chọn' : displayedMembers[vehicle.memberId] ? 'Đang chạy' : 'Đã vào'}</span>{leaderUnlocked && !vehicle.memberId.startsWith('slot:') && <button className="trip-button trip-button-danger" type="button" disabled={memberBusy} onClick={() => void removeVehicle(vehicle.memberId)}>Xóa xe</button>}</div>)}<p className="route-note">Đường ô tô · thời gian ước tính, chưa tính giao thông trực tiếp. <a href="https://openrouteservice.org/" target="_blank" rel="noreferrer">openrouteservice</a> · © OpenStreetMap contributors</p></div></> : <div className="trip-setup">{setupMode === null ? <><button className="trip-button" type="button" onClick={() => setSetupMode('create')}>Tạo chuyến mới</button><button className="trip-button trip-button-soft" type="button" onClick={() => setSetupMode('join')}>Tham gia chuyến</button></> : setupMode === 'create' ? <>{!googleToken ? <GoogleSignIn onCredential={(token) => void signInGoogle(token)} /> : <><div className="trip-entry-row"><span>{googleName || 'Đã đăng nhập Google'}</span><button className="trip-button trip-button-soft" type="button" onClick={signOutGoogle}>Đăng xuất</button></div><label className="trip-field"><span>Tên chuyến đi</span><input className="trip-input" value={tripName} onChange={(event) => setTripName(event.target.value)} aria-label="Tên chuyến đi" placeholder="Tên chuyến đi" /></label><label className="trip-field"><span>Mã đoàn (không bắt buộc)</span><input className="trip-input" value={customCode} onChange={(event) => setCustomCode(event.target.value.toUpperCase())} aria-label="Mã đoàn tuỳ chọn" placeholder="Mã đoàn tuỳ chọn (không bắt buộc)" maxLength={32} /></label><div className="vehicle-count-row"><label htmlFor="vehicle-count">Số lượng xe</label><select id="vehicle-count" className="trip-input" value={vehicleCount} onChange={(event) => setVehicleCount(Number(event.target.value))}>{[1, 2, 3, 4, 5].map((count) => <option key={count} value={count}>{count}</option>)}</select></div><div className="trip-field"><span>Danh sách mã xe</span>{vehicleCodeBoxes.slice(0, vehicleCount).map((code, index) => <label className="trip-field" key={index}><span>Xe {index + 1}</span><input className="trip-input" maxLength={20} value={code} onChange={(event) => setVehicleCodeBoxes((previous) => previous.map((value, i) => i === index ? event.target.value.toUpperCase() : value))} /></label>)}</div><label className="trip-field"><span>Mã xe của trưởng đoàn</span><select className="trip-input" value={selectedVehicleCode} onChange={(event) => setSelectedVehicleCode(event.target.value)} aria-label="Mã xe của trưởng đoàn"><option value="">Chọn mã xe của bạn</option>{parseVehicleCodes(vehicleCodesInput).map((code) => <option key={code} value={code}>{code}</option>)}</select></label><button className="trip-button" type="button" disabled={tripBusy} onClick={() => void createTrip()}>{tripBusy ? 'Đang tạo…' : 'Tạo đoàn mới'}</button></>}</> : <><div className="trip-code-group"><input className="trip-input trip-code-input" value={tripInput} onChange={(event) => setTripInput(event.target.value)} aria-label="Mã chuyến đi hoặc liên kết" placeholder="Nhập mã đoàn" /><button className="trip-button trip-button-soft trip-scan-button" type="button" disabled={tripBusy} onClick={() => { setScanError(null); setScannerOpen(true); }}>QR</button></div><button className="trip-button trip-button-soft" type="button" disabled={tripBusy} onClick={() => void joinTrip()}>Tham gia</button></>}{tripError && <p className="trip-error" role="alert">{tripError}</p>}</div>}
           <div className="sheet-footer"><span>{tripId ? `${Object.keys(displayedMembers).length}/${tripSlots.length || '—'} xe đang chia sẻ vị trí` : position ? `${position.latitude.toFixed(5)}, ${position.longitude.toFixed(5)}` : error ?? 'Bật GPS để bắt đầu'}</span></div>

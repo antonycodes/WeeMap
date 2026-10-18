@@ -74,3 +74,16 @@ Add these JavaScript origins to the configured Google web OAuth client:
 
 Use `http://localhost:5173` for local testing, not the numeric loopback address.
 The OAuth client ID is public configuration. No client secret is needed by this flow.
+
+## Route from GPS to a Plus Code
+
+Use the route icon on the map. The departure point is the device's current GPS fix.
+Paste a full Plus Code, preview the destination pin, then request the driving route.
+Bare short codes resolve nearest to current GPS; always confirm the destination pin.
+Short codes with locality text need a full code instead; no geocoder is used.
+Routing sends the two coordinates to openrouteservice through the Worker.
+The ORS_API_KEY stays on the Worker. Routes are snapshots, without automatic rerouting.
+The public directions endpoint validates coordinates and uses a Durable Object quota:
+10 seconds between attempts, 60 requests per IP per UTC day, 600 globally per UTC day.
+Quota storage contains hashed IP identifiers and counters, not route coordinates.
+Deploy the updated Worker before using this frontend online. No D1 migration is required.

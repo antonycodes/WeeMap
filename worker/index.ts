@@ -1,3 +1,5 @@
+import { calculateDirections } from './directions';
+import { isCoordinates } from '../src/lib/plannedRoute';
 import { googleIdentity } from './googleAuth';
 import { calculateRouteMatrix, routesFromMatrix, type RouteMatrix } from './routing';
 import { isLiveLocationStale } from '../src/lib/liveLocation';
@@ -49,6 +51,7 @@ export class TripRoom implements DurableObject {
   }
 
   async fetch(request: Request): Promise<Response> {
+    if (request.method === 'POST' && new URL(request.url).pathname === '/api/directions') return this.directions(request);
     if (request.method === 'POST' && new URL(request.url).pathname.endsWith('/routes')) return this.routeEstimates(request);
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
       return json({ error: 'WebSocket required' }, 426);
@@ -59,6 +62,32 @@ export class TripRoom implements DurableObject {
     this.ctx.acceptWebSocket(pair[1]);
     for (const location of locations) pair[1].send(JSON.stringify(location));
     return new Response(null, { status: 101, webSocket: pair[0] });
+  }
+
+  private async directions(request: Request): Promise<Response> {
+    const body = await readJson(request);
+    if (!isCoordinates(body?.start) || !isCoordinates(body?.end)) return json({ error: 'Tọa độ không hợp lệ.' }, 400, request);
+    if (!this.env.ORS_API_KEY) return json({ error: 'Chưa cấu hình dịch vụ lộ trình.' }, 503, request);
+    const ipHash = hex(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(request.headers.get('CF-Connecting-IP') ?? 'local'))));
+    type Quota = { day: string; total: number; clients: Record<string, { count: number; last: number }> };
+    const allowed = await this.ctx.storage.transaction(async (storage) => {
+      const now = Date.now();
+      const day = new Date(now).toISOString().slice(0, 10);
+      let quota = await storage.get<Quota>('directionsQuota');
+      if (!quota || quota.day !== day) quota = { day, total: 0, clients: {} };
+      const client = quota.clients[ipHash] ?? { count: 0, last: 0 };
+      if (quota.total >= 600 || client.count >= 60 || now - client.last < 10_000) return false;
+      quota.total++;
+      quota.clients[ipHash] = { count: client.count + 1, last: now };
+      await storage.put('directionsQuota', quota);
+      return true;
+    });
+    if (!allowed) return json({ error: 'Đã giới hạn lượt tính đường. Thử lại sau.' }, 429, request);
+    try {
+      return json(await calculateDirections(this.env.ORS_API_KEY, body.start, body.end), 200, request);
+    } catch {
+      return json({ error: 'Không tìm được đường ô tô hoặc dịch vụ đang bận. Thử lại sau.' }, 503, request);
+    }
   }
 
   private async routeEstimates(request: Request): Promise<Response> {
@@ -147,6 +176,12 @@ export default {
     const url = new URL(request.url);
 
     if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders(request) });
+
+    if (url.pathname === '/api/directions' && request.method === 'POST') {
+      const origin = request.headers.get('Origin');
+      if (origin && !APP_ORIGINS.has(origin)) return json({ error: 'Origin not allowed' }, 403, request);
+      return env.TRIP_ROOM.get(env.TRIP_ROOM.idFromName('directions')).fetch(request);
+    }
 
     if (url.pathname === '/api/health') return json({ ok: true, phase: 0 }, 200, request);
 
