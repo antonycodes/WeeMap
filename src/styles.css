@@ -113,6 +113,8 @@ h1 { margin: 0; color: #17221f; font-size: clamp(21px, 5vw, 28px); font-weight: 
 .trip-field > span, .vehicle-count-row > label { font-weight: 700; }
 
 .convoy-diagram { position: absolute; z-index: 2; right: 78px; bottom: max(24px, env(safe-area-inset-bottom)); left: 16px; width: max-content; max-width: calc(100% - 94px); padding: 14px; border: 1px solid rgba(255,255,255,.82); border-radius: 15px; background: rgba(246,250,247,.92); box-shadow: 0 8px 24px rgba(39,72,56,.12); backdrop-filter: blur(16px); }
+.convoy-heading { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; }
+.convoy-heading img { width: 32px; height: 32px; object-fit: contain; }
 .convoy-diagram h2 { margin: 0; font-size: 13px; font-weight: 750; }
 .convoy-diagram p { margin: 4px 0 12px; color: #557261; font-size: 10px; }
 .convoy-nodes { display: flex; overflow-x: auto; margin: 0; padding: 0 0 4px; list-style: none; }

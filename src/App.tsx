@@ -832,7 +832,7 @@ export default function App() {
         </div>
 
         {tripId && memberReady && !panelOpen && !routeOpen && <section className="convoy-diagram" aria-label="Khoảng cách">
-          <h2>Khoảng cách</h2>
+          <div className="convoy-heading"><img src="/icons/distance.png" alt="" /><h2>Khoảng cách</h2></div>
           <ol className="convoy-nodes">
             <li className="convoy-node"><strong style={{ backgroundColor: getVehicleColor(memberId) }}>{selectedVehicleCode || 'Xe của bạn'}</strong><span>Bạn</span></li>
             {diagramVehicles.map((vehicle) => <li className="convoy-node" key={vehicle.memberId}><strong style={{ backgroundColor: getVehicleColor(vehicle.memberId) }}>{vehicle.displayName}</strong><span>{vehicle.distance === undefined ? vehicleDistance(vehicle.memberId) : formatDistance(vehicle.distance)}</span></li>)}
