@@ -44,7 +44,8 @@ button { -webkit-tap-highlight-color: transparent; }
 .refresh-control img { width: 28px; height: 28px; object-fit: contain; }
 .map-signal-warning { color: #b3622c; font-size: 10px; font-weight: 750; }
 .update-banner { max-width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 10px 12px 10px 14px; border: 1px solid #8fbd76; border-radius: 14px; color: #244528; background: rgba(226,244,214,.94); box-shadow: 0 12px 28px rgba(52,92,46,.16); backdrop-filter: blur(14px); font-size: 12px; }
-.update-banner button { border: 0; border-radius: 999px; padding: 7px 11px; color: #f7fff4; background: #39794b; cursor: pointer; font-size: 11px; font-weight: 750; }
+.update-banner button { display: grid; place-items: center; flex-shrink: 0; width: 44px; height: 44px; border: 0; padding: 0; background: transparent; cursor: pointer; }
+.update-banner button img { width: 36px; height: 36px; object-fit: contain; }
 .map-sheet { right: 0; bottom: 0; left: 0; max-height: min(82dvh, 760px); overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; padding: 20px 18px max(18px, env(safe-area-inset-bottom)); border: 1px solid rgba(255,255,255,.78); border-bottom: 0; border-radius: 25px 25px 0 0; background: rgba(248,251,249,.94); box-shadow: 0 -14px 40px rgba(39,72,56,.16); backdrop-filter: blur(20px); }
 .sheet-heading, .driving-row, .sheet-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .sheet-heading { margin-bottom: 17px; }

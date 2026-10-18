@@ -689,8 +689,8 @@ export default function App() {
             <a className="map-attribution" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap contributors</a>
             {updateAvailable && (
               <div className="update-banner" role="status">
-                <span>Có bản cập nhật mới.</span>
-                <button type="button" onClick={() => window.location.reload()}>Tải lại</button>
+                <span>Cập nhật phiên bản mới nhất</span>
+                <button type="button" aria-label="Cập nhật phiên bản mới nhất" onClick={() => window.location.reload()}><img src="/icons/update.png" alt="" /></button>
               </div>
             )}
           </div>
