@@ -29,6 +29,7 @@ const workerOrigin = (import.meta.env.VITE_WORKER_ORIGIN
 
 export default function App() {
   const [gpsState, setGpsState] = useState<CheckState>('pending');
+  const [gpsRefreshing, setGpsRefreshing] = useState(false);
   const [serverState, setServerState] = useState<CheckState>('pending');
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
@@ -998,6 +999,25 @@ export default function App() {
     mapInstance.current?.flyTo({ center: [longitude, latitude], zoom: Math.max(mapZoom, 15) });
   };
 
+  const refreshGps = () => {
+    if (!navigator.geolocation || gpsRefreshing) return;
+    setGpsRefreshing(true);
+    navigator.geolocation.getCurrentPosition(
+      (next) => {
+        setPosition({ latitude: next.coords.latitude, longitude: next.coords.longitude, accuracy: next.coords.accuracy, speed: next.coords.speed, timestamp: next.timestamp });
+        setGpsState('ok');
+        setError(null);
+        setGpsRefreshing(false);
+      },
+      (nextError) => {
+        setGpsState('blocked');
+        setError(nextError.message);
+        setGpsRefreshing(false);
+      },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 },
+    );
+  };
+
   const navigateMap = () => {
     const map = mapInstance.current;
     if (!map || !navigatorPoints.length) return;
@@ -1025,6 +1045,7 @@ export default function App() {
     && nearbyVehicles.filter((vehicle) => vehicle.distance !== undefined).every((vehicle) => vehicle.route);
   const diagramVehicles = nearbyVehicles.map((vehicle) => ({ ...vehicle, distance: diagramUsesRoad ? vehicle.route ? vehicle.route.distanceMeters / 1000 : undefined : vehicle.distance }))
     .sort((a, b) => (a.distance ?? Infinity) - (b.distance ?? Infinity) || a.displayName.localeCompare(b.displayName));
+  const gpsHasSignal = gpsState === 'ok' && position !== null && !isLiveLocationStale(new Date(position.timestamp).toISOString(), signalCheckAt);
 
   return (
     <main className="map-shell">
@@ -1055,6 +1076,7 @@ export default function App() {
           <button className="map-control" type="button" aria-label="Phóng to" onClick={() => { const nextZoom = Math.min(20, mapZoom + 1); setMapZoom(nextZoom); mapInstance.current?.setZoom(nextZoom); }}>+</button>
           <button className="map-control" type="button" aria-label="Thu nhỏ" onClick={() => { const nextZoom = Math.max(4, mapZoom - 1); setMapZoom(nextZoom); mapInstance.current?.setZoom(nextZoom); }}>−</button>
           <button className="map-control locate-control" type="button" aria-label="Toàn cảnh và từng vị trí" disabled={!navigatorPoints.length} onClick={navigateMap}><img src="/icons/navigator.png" alt="" /></button>
+          <button className="map-control gps-signal-control" type="button" aria-label={`GPS Signal: ${gpsHasSignal ? 'có tín hiệu' : 'mất tín hiệu'}`} title="GPS Signal" disabled={gpsRefreshing} onClick={refreshGps}><img src={gpsHasSignal ? '/icons/gps-signal-active.png' : '/icons/gps-signal-lost.png'} alt="" /></button>
           <button className="map-control route-control" type="button" aria-label="Lập lộ trình" aria-expanded={routeOpen} onClick={() => { setRouteOpen((open) => !open); setPanelOpen(false); }}><img src="/icons/route.png" alt="" /></button>
           <button className="map-control refresh-control" type="button" aria-label="Làm mới vị trí" onClick={() => window.location.reload()}><img src="/icons/refresh.png" alt="" /></button>
         </div>
