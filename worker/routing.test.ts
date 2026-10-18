@@ -47,6 +47,25 @@ function roomFixture() {
 }
 
 describe('trip routing authorization and shared cache', () => {
+  it('returns short-lived TURN credentials without exposing the Worker secret', async () => {
+    const fetcher = vi.fn().mockResolvedValue(Response.json({
+      iceServers: [{ urls: ['stun:stun.cloudflare.com:3478', 'turn:turn.cloudflare.com:53'], username: 'user', credential: 'credential' }],
+    }, { status: 201 }));
+    vi.stubGlobal('fetch', fetcher);
+    const { room, env } = roomFixture();
+    Object.assign(env, { TURN_KEY_TOKEN: 'turn-token-id', TURN_KEY_SECRET: 'turn-secret' });
+    const response = await room.fetch(new Request('https://example.com/api/trips/TEST/voice-credentials', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ memberId: 'car-1', memberToken: 'valid-token' }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ iceServers: [{ urls: ['stun:stun.cloudflare.com:3478'], username: 'user', credential: 'credential' }] });
+    expect(fetcher.mock.calls[0][0]).toBe('https://rtc.live.cloudflare.com/v1/turn/keys/turn-token-id/credentials/generate-ice-servers');
+    expect(fetcher.mock.calls[0][1].headers.Authorization).toBe('Bearer turn-secret');
+  });
+
   it('rejects expired sessions before using the routing quota', async () => {
     const fetcher = vi.fn();
     vi.stubGlobal('fetch', fetcher);

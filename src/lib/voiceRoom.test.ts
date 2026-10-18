@@ -13,6 +13,7 @@ describe('voice signaling validation', () => {
     const room = new VoiceRoom({
       memberId: 'car-2',
       getMemberToken: () => 'token',
+      getIceServers: async () => [],
       onStatus: vi.fn(),
       onSpeaking: vi.fn(),
       onCall,

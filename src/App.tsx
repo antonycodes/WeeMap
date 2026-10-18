@@ -775,6 +775,16 @@ export default function App() {
     const room = new VoiceRoom({
       memberId,
       getMemberToken: () => localStorage.getItem(`weemap-member-token:${tripId}`) ?? '',
+      getIceServers: async () => {
+        const response = await fetch(`${workerOrigin}/api/trips/${tripId}/voice-credentials`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ memberId, memberToken: localStorage.getItem(`weemap-member-token:${tripId}`) ?? '' }),
+        });
+        if (!response.ok) throw new Error('TURN credentials unavailable');
+        const data = await response.json() as { iceServers?: RTCIceServer[] };
+        return data.iceServers ?? [];
+      },
       onStatus: (status, errorMessage) => {
         setVoiceStatus(status);
         setVoiceError(errorMessage ?? '');

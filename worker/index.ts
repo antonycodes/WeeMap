@@ -6,7 +6,7 @@ import { isLiveLocationStale } from '../src/lib/liveLocation';
 import { parseSharedRouteState, type SharedRouteState } from '../src/lib/routeState';
 import { geocodeDestination, GeocodeError } from './geocode';
 
-interface RoutingEnv extends Env { ORS_API_KEY?: string }
+interface RoutingEnv extends Env { ORS_API_KEY?: string; TURN_KEY_TOKEN?: string; TURN_KEY_SECRET?: string }
 type RoutingQuota = { day: string; total: number; clients: Record<string, { count: number; last: number }> };
 
 type LocationMessage = {
@@ -67,6 +67,7 @@ export class TripRoom implements DurableObject {
     if (request.method === 'POST' && pathname === '/api/geocode') return this.geocode(request);
     if (request.method === 'POST' && pathname.endsWith('/route-state')) return this.routeState(request);
     if (request.method === 'POST' && pathname.endsWith('/routes')) return this.routeEstimates(request);
+    if (request.method === 'POST' && pathname.endsWith('/voice-credentials')) return this.voiceCredentials(request);
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
       return json({ error: 'WebSocket required' }, 426);
     }
@@ -189,6 +190,31 @@ export class TripRoom implements DurableObject {
       return json({ calculatedAt: matrix.calculatedAt, routes: routesFromMatrix(matrix, memberId, new Set(locations.map((location) => location.memberId))) }, 200, request);
     } catch {
       return json({ error: 'Routing temporarily unavailable' }, 503, request);
+    }
+  }
+
+  private async voiceCredentials(request: Request): Promise<Response> {
+    const body = await readJson(request);
+    const memberId = typeof body?.memberId === 'string' ? body.memberId : '';
+    const memberToken = typeof body?.memberToken === 'string' ? body.memberToken : '';
+    if (!memberId || memberId.length > 80 || !memberToken || memberToken.length > 128) return json({ error: 'Member authorization required' }, 403, request);
+    const member = await this.env.DB.prepare('SELECT member_token FROM trip_members WHERE trip_id = ? AND member_id = ?')
+      .bind(this.ctx.id.name ?? 'unknown', memberId)
+      .first<{ member_token: string | null }>();
+    if (!member?.member_token || !equalHash(member.member_token, memberToken)) return json({ error: 'Member authorization required' }, 403, request);
+    if (!this.env.TURN_KEY_TOKEN || !this.env.TURN_KEY_SECRET) return json({ error: 'TURN is not configured' }, 503, request);
+    try {
+      const response = await fetch(`https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(this.env.TURN_KEY_TOKEN)}/credentials/generate-ice-servers`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${this.env.TURN_KEY_SECRET}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ ttl: 3600 }),
+      });
+      if (!response.ok) return json({ error: 'TURN credential generation failed' }, 503, request);
+      const payload = await response.json() as { iceServers?: unknown };
+      const iceServers = filterVoiceIceServers(payload.iceServers);
+      return iceServers ? json({ iceServers }, 200, request) : json({ error: 'TURN returned invalid credentials' }, 503, request);
+    } catch {
+      return json({ error: 'TURN credential service unavailable' }, 503, request);
     }
   }
 
@@ -375,11 +401,14 @@ export default {
       return json({ id, name, status: 'active', memberToken }, 201, request);
     }
 
-    const tripMatch = url.pathname.match(/^\/api\/trips\/([A-Za-z0-9_-]{4,64})(?:\/(members|leader|routes|route-state|slots))?$/);
+    const tripMatch = url.pathname.match(/^\/api\/trips\/([A-Za-z0-9_-]{4,64})(?:\/(members|leader|routes|route-state|slots|voice-credentials))?$/);
     if (tripMatch && url.pathname.endsWith('/routes') && request.method === 'POST') {
       return env.TRIP_ROOM.get(env.TRIP_ROOM.idFromName(tripMatch[1])).fetch(request);
     }
     if (tripMatch && url.pathname.endsWith('/route-state') && request.method === 'POST') {
+      return env.TRIP_ROOM.get(env.TRIP_ROOM.idFromName(tripMatch[1])).fetch(request);
+    }
+    if (tripMatch && url.pathname.endsWith('/voice-credentials') && request.method === 'POST') {
       return env.TRIP_ROOM.get(env.TRIP_ROOM.idFromName(tripMatch[1])).fetch(request);
     }
 
@@ -704,6 +733,19 @@ function isVoiceCallMessage(value: unknown): value is VoiceCallMessage {
     && typeof item.memberId === 'string' && item.memberId.length <= 80
     && typeof item.memberToken === 'string' && item.memberToken.length <= 128
     && typeof item.active === 'boolean';
+}
+
+function filterVoiceIceServers(value: unknown): Array<Record<string, unknown>> | null {
+  if (!Array.isArray(value)) return null;
+  const servers = value.flatMap((item) => {
+    if (!item || typeof item !== 'object') return [];
+    const server = item as Record<string, unknown>;
+    const urls = Array.isArray(server.urls)
+      ? server.urls.filter((url): url is string => typeof url === 'string' && !/:53(?:\?|$)/.test(url))
+      : typeof server.urls === 'string' && !/:53(?:\?|$)/.test(server.urls) ? server.urls : null;
+    return urls ? [{ ...server, urls }] : [];
+  });
+  return servers.length ? servers : null;
 }
 
 async function loadTripLocations(env: RoutingEnv, tripId: string): Promise<LocationMessage[]> {

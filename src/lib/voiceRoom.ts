@@ -16,6 +16,7 @@ export function isVoiceSignal(value: unknown): value is VoiceSignal {
 type VoiceRoomOptions = {
   memberId: string;
   getMemberToken: () => string;
+  getIceServers: () => Promise<RTCIceServer[]>;
   onStatus: (status: VoiceRoomStatus, error?: string) => void;
   onSpeaking: (memberId: string, speaking: boolean) => void;
   onCall: (memberId: string, active: boolean) => void;
@@ -24,6 +25,7 @@ type VoiceRoomOptions = {
 export class VoiceRoom {
   private readonly memberId: string;
   private readonly getMemberToken: () => string;
+  private readonly getIceServers: VoiceRoomOptions['getIceServers'];
   private readonly onStatus: VoiceRoomOptions['onStatus'];
   private readonly onSpeaking: VoiceRoomOptions['onSpeaking'];
   private readonly onCall: VoiceRoomOptions['onCall'];
@@ -39,6 +41,7 @@ export class VoiceRoom {
   constructor(options: VoiceRoomOptions) {
     this.memberId = options.memberId;
     this.getMemberToken = options.getMemberToken;
+    this.getIceServers = options.getIceServers;
     this.onStatus = options.onStatus;
     this.onSpeaking = options.onSpeaking;
     this.onCall = options.onCall;
@@ -145,6 +148,7 @@ export class VoiceRoom {
   }
 
   private async connectTo(memberId: string): Promise<void> {
+    await this.loadIceServers();
     const connection = this.ensurePeer(memberId);
     const hasLocalTrack = connection.getSenders().some((sender) => sender.track?.kind === 'audio');
     if (!hasLocalTrack || connection.signalingState !== 'stable' || this.negotiating.has(memberId)) return;
@@ -167,7 +171,7 @@ export class VoiceRoom {
       if (track && !existing.getSenders().some((sender) => sender.track?.kind === 'audio')) existing.addTrack(track, this.stream as MediaStream);
       return existing;
     }
-    const connection = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+    const connection = new RTCPeerConnection({ iceServers: this.iceServers ?? [{ urls: 'stun:stun.cloudflare.com:3478' }] });
     this.connections.set(memberId, connection);
     const track = this.stream?.getAudioTracks()[0];
     if (track) connection.addTrack(track, this.stream as MediaStream);
@@ -192,6 +196,7 @@ export class VoiceRoom {
   }
 
   private async handleSignal(memberId: string, signal: VoiceSignal): Promise<void> {
+    await this.loadIceServers();
     const connection = this.ensurePeer(memberId);
     try {
       if ('candidate' in signal) {
@@ -222,5 +227,20 @@ export class VoiceRoom {
     this.remoteAudio.get(memberId)?.remove();
     this.remoteAudio.delete(memberId);
     this.onSpeaking(memberId, false);
+  }
+
+  private iceServers: RTCIceServer[] | null = null;
+  private iceServersRequest: Promise<RTCIceServer[]> | null = null;
+
+  private async loadIceServers(): Promise<void> {
+    if (this.iceServers || this.iceServersRequest) {
+      if (this.iceServersRequest) this.iceServers = await this.iceServersRequest;
+      return;
+    }
+    this.iceServersRequest = this.getIceServers()
+      .then((iceServers) => iceServers.length ? iceServers : [{ urls: 'stun:stun.cloudflare.com:3478' }])
+      .catch(() => [{ urls: 'stun:stun.cloudflare.com:3478' }]);
+    this.iceServers = await this.iceServersRequest;
+    this.iceServersRequest = null;
   }
 }
