@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AttributionControl, Map as MapLibreMap, Marker } from 'maplibre-gl';
+import { Map as MapLibreMap, Marker } from 'maplibre-gl';
 import QRCode from 'qrcode';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { getLatestCommit, hasNewerCommit, type BuildInfo } from './lib/appUpdate';
@@ -610,7 +610,6 @@ export default function App() {
       zoom: mapZoom,
       attributionControl: false,
     });
-    map.addControl(new AttributionControl({ compact: true }), 'top-left');
     mapInstance.current = map;
     return () => {
       for (const marker of markers.current.values()) marker.remove();
@@ -690,23 +689,24 @@ export default function App() {
         <div className="map" ref={mapRef} />
 
         <header className="map-toolbar">
-          <div className="brand-lockup"><span className="brand-dot" /> <strong>WeeMap</strong><span className="trip-label">{tripId ? 'Đang theo đoàn' : 'Bản đồ nhóm'}</span></div>
+          <div className="map-info-stack">
+            <div className="brand-lockup"><img className="brand-logo" src="/icons/weemap.png" alt="" /><div className="brand-copy"><strong>WeeMap - Di chuyển nhóm</strong><small>Sản phẩm thử nghiệm của Antony</small></div></div>
+            <div className="map-status" aria-live="polite">
+              <span className={`status-dot status-${gpsState}`} />
+              <span>{position ? 'Đang định vị' : gpsState === 'blocked' ? 'GPS chưa sẵn sàng' : 'Đang tìm vị trí'}</span>
+              {position && <small>± {Math.round(position.accuracy)} m</small>}
+              {signalIssueVehicles.length > 0 && <span className="map-signal-warning" role="alert">{signalIssueVehicles.length} xe cần kiểm tra GPS</span>}
+            </div>
+            <a className="map-attribution" href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">© OpenStreetMap contributors</a>
+            {updateAvailable && (
+              <div className="update-banner" role="status">
+                <span>Có bản cập nhật mới.</span>
+                <button type="button" onClick={() => window.location.reload()}>Tải lại</button>
+              </div>
+            )}
+          </div>
           <button className="round-button" type="button" aria-label={panelOpen ? 'Đóng thiết lập chuyến đi' : 'Mở thiết lập chuyến đi'} onClick={() => setPanelOpen((open) => !open)}><img src="/icons/settings.png" alt="" /></button>
         </header>
-
-        {updateAvailable && (
-          <div className="update-banner" role="status">
-            <span>Có bản cập nhật mới.</span>
-            <button type="button" onClick={() => window.location.reload()}>Tải lại</button>
-          </div>
-        )}
-
-        <div className="map-status" aria-live="polite">
-          <span className={`status-dot status-${gpsState}`} />
-          <span>{position ? 'Đang định vị' : gpsState === 'blocked' ? 'GPS chưa sẵn sàng' : 'Đang tìm vị trí'}</span>
-          {position && <small>± {Math.round(position.accuracy)} m</small>}
-          {signalIssueVehicles.length > 0 && <span className="map-signal-warning" role="alert">{signalIssueVehicles.length} xe cần kiểm tra GPS</span>}
-        </div>
 
         <div className={`map-controls${panelOpen ? '' : ' map-controls-full'}`} aria-label="Điều khiển bản đồ">
           <button className="map-control" type="button" aria-label="Phóng to" onClick={() => { const nextZoom = Math.min(20, mapZoom + 1); setMapZoom(nextZoom); mapInstance.current?.setZoom(nextZoom); }}>+</button>
