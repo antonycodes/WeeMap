@@ -38,6 +38,7 @@ export default function App() {
   const [routeOpen, setRouteOpen] = useState(false);
   const [routeTarget, setRouteTarget] = useState<RouteTarget | null>(null);
   const [plannedRoute, setPlannedRoute] = useState<PlannedRoute | null>(null);
+  const [routeStarted, setRouteStarted] = useState(false);
   const [routeBusy, setRouteBusy] = useState(false);
   const [routeError, setRouteError] = useState('');
   const routeRequest = useRef<AbortController | null>(null);
@@ -127,6 +128,7 @@ export default function App() {
     fittedRoute.current = null;
     setRouteBusy(false);
     setPlannedRoute(null);
+    setRouteStarted(false);
     setRouteTarget(null);
     setRouteError('');
   };
@@ -154,6 +156,7 @@ export default function App() {
       if (!controller.signal.aborted) {
         lastRerouteAt.current = Date.now();
         setPlannedRoute(route);
+        if (clearCurrent) setRouteStarted(false);
         if (closeSheet) setRouteOpen(false);
       }
     } catch (error) {
@@ -186,12 +189,12 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!plannedRoute || !routeTarget || !position || routeBusy || !routeProgress?.offRoute) return;
+    if (!routeStarted || !plannedRoute || !routeTarget || !position || routeBusy || !routeProgress?.offRoute) return;
     const now = Date.now();
     if (now - lastRerouteAt.current < 30_000) return;
     lastRerouteAt.current = now;
     void requestRoute(position, routeTarget, false, false);
-  }, [plannedRoute, position, requestRoute, routeBusy, routeProgress, routeTarget]);
+  }, [plannedRoute, position, requestRoute, routeBusy, routeProgress, routeStarted, routeTarget]);
 
   const registerMember = async (id: string, vehicleCode: string) => {
     const tokenKey = `weemap-member-token:${id}`;
@@ -766,9 +769,10 @@ export default function App() {
     const draw = () => {
       const features: FeatureCollection['features'] = [];
       if (plannedRoute) {
-        const progress = routeProgress ?? { traveled: [], remaining: plannedRoute.coordinates, remainingDistanceMeters: plannedRoute.distanceMeters, offRoute: false };
-        if (progress.remaining.length > 1) features.push({ type: 'Feature', properties: { kind: 'remaining' }, geometry: { type: 'LineString', coordinates: progress.remaining } });
-        if (progress.traveled.length > 1) features.push({ type: 'Feature', properties: { kind: 'traveled' }, geometry: { type: 'LineString', coordinates: progress.traveled } });
+        const progress = routeStarted ? routeProgress : null;
+        if (progress && progress.remaining.length > 1) features.push({ type: 'Feature', properties: { kind: 'remaining' }, geometry: { type: 'LineString', coordinates: progress.remaining } });
+        if (progress && progress.traveled.length > 1) features.push({ type: 'Feature', properties: { kind: 'traveled' }, geometry: { type: 'LineString', coordinates: progress.traveled } });
+        if (!progress) features.push({ type: 'Feature', properties: { kind: 'remaining' }, geometry: { type: 'LineString', coordinates: plannedRoute.coordinates } });
       }
       const data: FeatureCollection = { type: 'FeatureCollection', features };
       const source = map.getSource('planned-route') as GeoJSONSource | undefined;
@@ -776,8 +780,8 @@ export default function App() {
       else {
         map.addSource('planned-route', { type: 'geojson', data });
         map.addLayer({ id: 'planned-route-outline', type: 'line', source: 'planned-route', layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#ffffff', 'line-width': 8 } });
-        map.addLayer({ id: 'planned-route-traveled', type: 'line', source: 'planned-route', filter: ['==', ['get', 'kind'], 'traveled'], layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#87968f', 'line-width': 5 } });
-        map.addLayer({ id: 'planned-route-line', type: 'line', source: 'planned-route', filter: ['==', ['get', 'kind'], 'remaining'], layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#1677df', 'line-width': 5 } });
+        map.addLayer({ id: 'planned-route-traveled', type: 'line', source: 'planned-route', filter: ['==', ['get', 'kind'], 'traveled'], layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#1677df', 'line-width': 5 } });
+        map.addLayer({ id: 'planned-route-line', type: 'line', source: 'planned-route', filter: ['==', ['get', 'kind'], 'remaining'], layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#87968f', 'line-width': 5 } });
       }
       if (plannedRoute && plannedRoute !== fittedRoute.current) {
         const bounds = plannedRoute.coordinates.reduce((area, point) => area.extend(point), new LngLatBounds(plannedRoute.coordinates[0], plannedRoute.coordinates[0]));
@@ -789,7 +793,7 @@ export default function App() {
     if (map.getLayer('osm')) draw();
     else map.once('style.load', draw);
     return () => { map.off('style.load', draw); };
-  }, [plannedRoute, routeProgress]);
+  }, [plannedRoute, routeProgress, routeStarted]);
 
   const vehicleList = useMemo(() => {
     if (tripSlots.length) {
@@ -890,7 +894,7 @@ export default function App() {
             {(routeTarget || plannedRoute) && <button className="trip-button trip-button-soft" type="button" onClick={clearPlannedRoute}>Xóa lộ trình</button>}
           </form>
         </section>}
-        {plannedRoute && !panelOpen && !routeOpen && <div className="route-summary" role="status"><strong>{routeProgress?.offRoute ? 'Đang tính lại tuyến…' : `${formatDistance((routeProgress?.remainingDistanceMeters ?? plannedRoute.distanceMeters) / 1000)} còn lại · khoảng ${Math.max(1, Math.ceil((plannedRoute.durationSeconds * (routeProgress?.remainingDistanceMeters ?? plannedRoute.distanceMeters)) / Math.max(1, plannedRoute.distanceMeters) / 60))} phút`}</strong><span>{routeProgress?.offRoute ? 'Bạn đang lệch tuyến' : 'Xám: đã đi · xanh: còn lại · openrouteservice · © OpenStreetMap'}</span><button className="trip-button trip-button-soft" type="button" onClick={clearPlannedRoute}>Xóa</button></div>}
+        {plannedRoute && !panelOpen && !routeOpen && <div className="route-summary" role="status"><strong>{!routeStarted ? 'Sẵn sàng bắt đầu' : routeProgress?.offRoute ? 'Đang tính lại tuyến…' : `${formatDistance((routeProgress?.remainingDistanceMeters ?? plannedRoute.distanceMeters) / 1000)} còn lại · khoảng ${Math.max(1, Math.ceil((plannedRoute.durationSeconds * (routeProgress?.remainingDistanceMeters ?? plannedRoute.distanceMeters)) / Math.max(1, plannedRoute.distanceMeters) / 60))} phút`}</strong><span>{routeProgress?.offRoute && routeStarted ? 'Bạn đang lệch tuyến' : 'Đường ô tô · openrouteservice · © OpenStreetMap'}</span>{!routeStarted && <button className="trip-button" type="button" onClick={() => setRouteStarted(true)}>Bắt đầu đi</button>}<button className="trip-button trip-button-soft" type="button" onClick={clearPlannedRoute}>Xóa</button></div>}
 
         {panelOpen && <div className="map-sheet" role="dialog" aria-label="Thiết lập chuyến đi">
           <div className="sheet-heading"><div><span className="eyebrow">CHUYẾN ĐI</span><h1>{tripId ? tripInfo?.name ?? 'Đoàn xe đang chạy' : setupMode === 'create' ? 'Tạo chuyến mới' : setupMode === 'join' ? 'Tham gia chuyến' : 'Hôm nay bạn muốn đi đâu ?'}</h1></div>{serverState === 'ok' && <span className="connection-pill connection-ok">Trực tuyến</span>}</div>
