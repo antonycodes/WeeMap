@@ -702,7 +702,9 @@ export default function App() {
     const activeIds = new Set(Object.keys(displayedMembers));
     for (const [id, location] of Object.entries(displayedMembers)) {
       const isCurrent = id === memberId;
-      const displayName = location.displayName ?? roster.find((member) => member.memberId === id)?.displayName ?? `Xe ${id.slice(0, 4)}`;
+      const displayName = isCurrent && (!tripId || !memberReady || !selectedVehicleCode.trim())
+        ? 'Bạn ở đây'
+        : location.displayName ?? roster.find((member) => member.memberId === id)?.displayName ?? `Xe ${id.slice(0, 4)}`;
       const color = getVehicleColor(id);
       let marker = markers.current.get(id);
       if (!marker) {
@@ -719,7 +721,7 @@ export default function App() {
         markers.current.delete(id);
       }
     }
-  }, [displayedMembers, memberId, roster]);
+  }, [displayedMembers, memberId, memberReady, roster, selectedVehicleCode, tripId]);
 
   useEffect(() => {
     const map = mapInstance.current;
@@ -885,7 +887,7 @@ function createVehicleMarker(isCurrent: boolean, memberId: string, displayName: 
   element.className = `vehicle-marker${isCurrent ? ' vehicle-marker-current' : ''}`;
   element.style.setProperty('--vehicle-color', color);
   element.setAttribute('role', 'img');
-  element.setAttribute('aria-label', isCurrent ? `Vị trí của ${displayName}` : displayName);
+  element.setAttribute('aria-label', displayName);
   element.dataset.label = displayName;
   const label = document.createElement('span');
   label.className = 'vehicle-marker-label';
@@ -900,6 +902,7 @@ function updateVehicleMarker(element: HTMLElement, displayName: string, color: s
   element.style.setProperty('--vehicle-color', color);
   const label = element.querySelector<HTMLElement>('.vehicle-marker-label');
   if (label) label.textContent = displayName;
+  element.setAttribute('aria-label', displayName);
   element.title = `${displayName} · ${speedKmh === undefined ? '—' : `${Math.round(speedKmh)} km/h`}`;
 }
 
