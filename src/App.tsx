@@ -1,6 +1,6 @@
 import type { FeatureCollection } from 'geojson';
 import { resolvePlusCode } from './lib/plusCode';
-import { parsePlannedRoute, type PlannedRoute } from './lib/plannedRoute';
+import { getRouteProgress, parsePlannedRoute, type PlannedRoute } from './lib/plannedRoute';
 import GoogleSignIn from './GoogleSignIn';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Map as MapLibreMap, Marker, LngLatBounds, type GeoJSONSource } from 'maplibre-gl';
@@ -20,6 +20,7 @@ type TripSlot = { code: string; memberId?: string | null; claimed: boolean };
 type TripInfo = { id: string; name: string; status: string; hasGoogleLeader?: boolean; hasLeaderPassword?: boolean; slots?: TripSlot[] };
 type TripMember = { memberId: string; displayName: string; joinedAt?: string };
 type SignalIssue = TripMember & { issue: 'missing' | 'stale' };
+type RouteTarget = ReturnType<typeof resolvePlusCode>;
 const VEHICLE_COLORS = ['#39794b', '#3f78b5', '#a7652d', '#8a4f9f', '#bd4e65', '#16828a', '#6d6b2f', '#c34f2d'];
 
 const workerOrigin = (import.meta.env.VITE_WORKER_ORIGIN
@@ -35,11 +36,12 @@ export default function App() {
   const [position, setPosition] = useState<Position | null>(null);
   const [destination, setDestination] = useState('');
   const [routeOpen, setRouteOpen] = useState(false);
-  const [routeTarget, setRouteTarget] = useState<ReturnType<typeof resolvePlusCode> | null>(null);
+  const [routeTarget, setRouteTarget] = useState<RouteTarget | null>(null);
   const [plannedRoute, setPlannedRoute] = useState<PlannedRoute | null>(null);
   const [routeBusy, setRouteBusy] = useState(false);
   const [routeError, setRouteError] = useState('');
   const routeRequest = useRef<AbortController | null>(null);
+  const lastRerouteAt = useRef(0);
   const [members, setMembers] = useState<Record<string, LiveLocation>>({});
   const [error, setError] = useState<string | null>(null);
   const [tripInput, setTripInput] = useState('');
@@ -71,6 +73,7 @@ export default function App() {
   const watchId = useRef<number | null>(null);
   const socket = useRef<WebSocket | null>(null);
   const mapInstance = useRef<MapLibreMap | null>(null);
+  const fittedRoute = useRef<PlannedRoute | null>(null);
   const markers = useRef<Map<string, Marker>>(new Map());
   const colors = useRef<Map<string, string>>(new Map());
   const centeredOnPosition = useRef(false);
@@ -81,6 +84,10 @@ export default function App() {
   const shareUrl = tripId ? `${window.location.origin}${window.location.pathname}?trip=${encodeURIComponent(tripId)}` : '';
 
   const currentSpeed = useMemo(() => speedFromMetersPerSecond(position?.speed ?? null), [position]);
+  const routeProgress = useMemo(
+    () => plannedRoute && position ? getRouteProgress(plannedRoute, [position.longitude, position.latitude]) : null,
+    [plannedRoute, position],
+  );
   const latestPosition = useRef(position);
   const latestSpeed = useRef(currentSpeed);
   latestPosition.current = position;
@@ -116,11 +123,45 @@ export default function App() {
   const clearPlannedRoute = () => {
     routeRequest.current?.abort();
     routeRequest.current = null;
+    lastRerouteAt.current = 0;
+    fittedRoute.current = null;
     setRouteBusy(false);
     setPlannedRoute(null);
     setRouteTarget(null);
     setRouteError('');
   };
+
+  const requestRoute = useCallback(async (start: Position, target: RouteTarget, closeSheet: boolean, clearCurrent: boolean) => {
+    routeRequest.current?.abort();
+    const controller = new AbortController();
+    routeRequest.current = controller;
+    setRouteBusy(true);
+    setRouteError('');
+    if (clearCurrent) setPlannedRoute(null);
+    try {
+      const response = await fetch(`${workerOrigin}/api/directions`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ start: [start.longitude, start.latitude], end: [target.longitude, target.latitude] }),
+        signal: controller.signal,
+      });
+      const data: unknown = await response.json().catch(() => { throw new Error('Máy chủ chưa trả về lộ trình hợp lệ. Hãy thử lại sau.'); });
+      if (!response.ok) {
+        const message = data && typeof data === 'object' && 'error' in data && typeof data.error === 'string' ? data.error.slice(0, 200) : 'Không tìm được lộ trình. Hãy thử lại sau.';
+        throw new Error(message);
+      }
+      const route = parsePlannedRoute(data);
+      if (!route) throw new Error('Dữ liệu lộ trình không hợp lệ.');
+      if (!controller.signal.aborted) {
+        lastRerouteAt.current = Date.now();
+        setPlannedRoute(route);
+        if (closeSheet) setRouteOpen(false);
+      }
+    } catch (error) {
+      if (!controller.signal.aborted) setRouteError(error instanceof Error ? error.message : 'Không tải được lộ trình.');
+    } finally {
+      if (routeRequest.current === controller) { routeRequest.current = null; setRouteBusy(false); }
+    }
+  }, []);
 
   const planRoute = async () => {
     setRouteError('');
@@ -136,33 +177,21 @@ export default function App() {
       } catch (error) { setRouteError(error instanceof Error ? error.message : 'Plus Code không hợp lệ.'); }
       return;
     }
-    routeRequest.current?.abort();
-    const controller = new AbortController();
-    routeRequest.current = controller;
-    setRouteBusy(true);
-    setPlannedRoute(null);
-    try {
-      const response = await fetch(`${workerOrigin}/api/directions`, {
-        method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ start: [position.longitude, position.latitude], end: [routeTarget.longitude, routeTarget.latitude] }),
-        signal: controller.signal,
-      });
-      const data: unknown = await response.json().catch(() => { throw new Error('Máy chủ chưa trả về lộ trình hợp lệ. Hãy thử lại sau.'); });
-      if (!response.ok) {
-        const message = data && typeof data === 'object' && 'error' in data && typeof data.error === 'string' ? data.error.slice(0, 200) : 'Không tìm được lộ trình. Hãy thử lại sau.';
-        throw new Error(message);
-      }
-      const route = parsePlannedRoute(data);
-      if (!route) throw new Error('Dữ liệu lộ trình không hợp lệ.');
-      if (!controller.signal.aborted) { setPlannedRoute(route); setRouteOpen(false); }
-    } catch (error) {
-      if (!controller.signal.aborted) setRouteError(error instanceof Error ? error.message : 'Không tải được lộ trình.');
-    } finally {
-      if (routeRequest.current === controller) { routeRequest.current = null; setRouteBusy(false); }
-    }
+    await requestRoute(position, routeTarget, true, true);
   };
 
-  useEffect(() => () => { routeRequest.current?.abort(); }, []);
+  useEffect(() => () => {
+    routeRequest.current?.abort();
+    fittedRoute.current = null;
+  }, []);
+
+  useEffect(() => {
+    if (!plannedRoute || !routeTarget || !position || routeBusy || !routeProgress?.offRoute) return;
+    const now = Date.now();
+    if (now - lastRerouteAt.current < 30_000) return;
+    lastRerouteAt.current = now;
+    void requestRoute(position, routeTarget, false, false);
+  }, [plannedRoute, position, requestRoute, routeBusy, routeProgress, routeTarget]);
 
   const registerMember = async (id: string, vehicleCode: string) => {
     const tokenKey = `weemap-member-token:${id}`;
@@ -735,24 +764,32 @@ export default function App() {
     const map = mapInstance.current;
     if (!map) return;
     const draw = () => {
-      const data: FeatureCollection = { type: 'FeatureCollection', features: plannedRoute ? [{ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: plannedRoute.coordinates } }] : [] };
+      const features: FeatureCollection['features'] = [];
+      if (plannedRoute) {
+        const progress = routeProgress ?? { traveled: [], remaining: plannedRoute.coordinates, remainingDistanceMeters: plannedRoute.distanceMeters, offRoute: false };
+        if (progress.remaining.length > 1) features.push({ type: 'Feature', properties: { kind: 'remaining' }, geometry: { type: 'LineString', coordinates: progress.remaining } });
+        if (progress.traveled.length > 1) features.push({ type: 'Feature', properties: { kind: 'traveled' }, geometry: { type: 'LineString', coordinates: progress.traveled } });
+      }
+      const data: FeatureCollection = { type: 'FeatureCollection', features };
       const source = map.getSource('planned-route') as GeoJSONSource | undefined;
       if (source) source.setData(data);
       else {
         map.addSource('planned-route', { type: 'geojson', data });
         map.addLayer({ id: 'planned-route-outline', type: 'line', source: 'planned-route', layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#ffffff', 'line-width': 8 } });
-        map.addLayer({ id: 'planned-route-line', type: 'line', source: 'planned-route', layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#1677df', 'line-width': 5 } });
+        map.addLayer({ id: 'planned-route-traveled', type: 'line', source: 'planned-route', filter: ['==', ['get', 'kind'], 'traveled'], layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#87968f', 'line-width': 5 } });
+        map.addLayer({ id: 'planned-route-line', type: 'line', source: 'planned-route', filter: ['==', ['get', 'kind'], 'remaining'], layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#1677df', 'line-width': 5 } });
       }
-      if (plannedRoute) {
+      if (plannedRoute && plannedRoute !== fittedRoute.current) {
         const bounds = plannedRoute.coordinates.reduce((area, point) => area.extend(point), new LngLatBounds(plannedRoute.coordinates[0], plannedRoute.coordinates[0]));
         map.fitBounds(bounds, { padding: { top: 200, right: 75, bottom: 180, left: 30 }, maxZoom: 16 });
+        fittedRoute.current = plannedRoute;
       }
     };
     // Tile downloads can keep isStyleLoaded false after the one-time load event.
     if (map.getLayer('osm')) draw();
     else map.once('style.load', draw);
     return () => { map.off('style.load', draw); };
-  }, [plannedRoute]);
+  }, [plannedRoute, routeProgress]);
 
   const vehicleList = useMemo(() => {
     if (tripSlots.length) {
@@ -853,7 +890,7 @@ export default function App() {
             {(routeTarget || plannedRoute) && <button className="trip-button trip-button-soft" type="button" onClick={clearPlannedRoute}>Xóa lộ trình</button>}
           </form>
         </section>}
-        {plannedRoute && !panelOpen && !routeOpen && <div className="route-summary" role="status"><strong>{formatDistance(plannedRoute.distanceMeters / 1000)} · khoảng {Math.max(1, Math.ceil(plannedRoute.durationSeconds / 60))} phút</strong><span>Đường ô tô · openrouteservice · © OpenStreetMap</span><button className="trip-button trip-button-soft" type="button" onClick={clearPlannedRoute}>Xóa</button></div>}
+        {plannedRoute && !panelOpen && !routeOpen && <div className="route-summary" role="status"><strong>{routeProgress?.offRoute ? 'Đang tính lại tuyến…' : `${formatDistance((routeProgress?.remainingDistanceMeters ?? plannedRoute.distanceMeters) / 1000)} còn lại · khoảng ${Math.max(1, Math.ceil((plannedRoute.durationSeconds * (routeProgress?.remainingDistanceMeters ?? plannedRoute.distanceMeters)) / Math.max(1, plannedRoute.distanceMeters) / 60))} phút`}</strong><span>{routeProgress?.offRoute ? 'Bạn đang lệch tuyến' : 'Xám: đã đi · xanh: còn lại · openrouteservice · © OpenStreetMap'}</span><button className="trip-button trip-button-soft" type="button" onClick={clearPlannedRoute}>Xóa</button></div>}
 
         {panelOpen && <div className="map-sheet" role="dialog" aria-label="Thiết lập chuyến đi">
           <div className="sheet-heading"><div><span className="eyebrow">CHUYẾN ĐI</span><h1>{tripId ? tripInfo?.name ?? 'Đoàn xe đang chạy' : setupMode === 'create' ? 'Tạo chuyến mới' : setupMode === 'join' ? 'Tham gia chuyến' : 'Hôm nay bạn muốn đi đâu ?'}</h1></div>{serverState === 'ok' && <span className="connection-pill connection-ok">Trực tuyến</span>}</div>
