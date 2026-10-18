@@ -147,8 +147,11 @@ export default function App() {
         body: JSON.stringify({ start: [position.longitude, position.latitude], end: [routeTarget.longitude, routeTarget.latitude] }),
         signal: controller.signal,
       });
-      if (!response.ok) throw new Error(response.status === 429 ? 'Đã giới hạn lượt tính đường. Hãy thử lại sau.' : 'Không tìm được lộ trình. Kiểm tra điểm đến hoặc thử lại sau.');
       const data: unknown = await response.json().catch(() => { throw new Error('Máy chủ chưa trả về lộ trình hợp lệ. Hãy thử lại sau.'); });
+      if (!response.ok) {
+        const message = data && typeof data === 'object' && 'error' in data && typeof data.error === 'string' ? data.error.slice(0, 200) : 'Không tìm được lộ trình. Hãy thử lại sau.';
+        throw new Error(message);
+      }
       const route = parsePlannedRoute(data);
       if (!route) throw new Error('Dữ liệu lộ trình không hợp lệ.');
       if (!controller.signal.aborted) { setPlannedRoute(route); setRouteOpen(false); }

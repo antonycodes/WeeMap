@@ -1,4 +1,4 @@
-import { calculateDirections } from './directions';
+import { calculateDirections, DirectionsError } from './directions';
 import { isCoordinates } from '../src/lib/plannedRoute';
 import { googleIdentity } from './googleAuth';
 import { calculateRouteMatrix, routesFromMatrix, type RouteMatrix } from './routing';
@@ -85,8 +85,10 @@ export class TripRoom implements DurableObject {
     if (!allowed) return json({ error: 'Đã giới hạn lượt tính đường. Thử lại sau.' }, 429, request);
     try {
       return json(await calculateDirections(this.env.ORS_API_KEY, body.start, body.end), 200, request);
-    } catch {
-      return json({ error: 'Không tìm được đường ô tô hoặc dịch vụ đang bận. Thử lại sau.' }, 503, request);
+    } catch (error) {
+      if (error instanceof DirectionsError) return json({ error: error.message }, error.status, request);
+      if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) return json({ error: 'Dịch vụ tính đường phản hồi chậm. Hãy thử lại sau.' }, 504, request);
+      return json({ error: 'Worker chưa kết nối được dịch vụ tính đường. Hãy thử lại sau.' }, 503, request);
     }
   }
 
