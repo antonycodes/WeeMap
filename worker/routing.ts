@@ -15,7 +15,7 @@ function readMatrix(value: unknown, size: number): Array<Array<number | null>> {
 }
 
 export async function calculateRouteMatrix(apiKey: string, points: RoutePoint[]): Promise<RouteMatrix> {
-  const response = await fetch('https://api.openrouteservice.org/v2/matrix/driving-car', {
+  const response = await fetch('https://api.heigit.org/openrouteservice/v2/matrix/driving-car', {
     method: 'POST',
     headers: { Authorization: apiKey, 'content-type': 'application/json' },
     body: JSON.stringify({ locations: points.map((point) => [point.longitude, point.latitude]), metrics: ['distance', 'duration'], units: 'm' }),

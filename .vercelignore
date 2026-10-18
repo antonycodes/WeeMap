@@ -1,0 +1,10 @@
+.dev.vars
+.dev.vars.*
+.env
+.env.*
+sources/
+.wrangler/
+.codex/
+.agents/
+AGENTS*.md
+*.tsbuildinfo

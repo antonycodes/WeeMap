@@ -87,3 +87,15 @@ The public directions endpoint validates coordinates and uses a Durable Object q
 10 seconds between attempts, 60 requests per IP per UTC day, 600 globally per UTC day.
 Quota storage contains hashed IP identifiers and counters, not route coordinates.
 Deploy the updated Worker before using this frontend online. No D1 migration is required.
+
+## Routing diagnostics
+
+Directions and Matrix use `https://api.heigit.org/openrouteservice/v2`.
+The Worker calls ORS directly with a 45-second directions timeout.
+Diagnostic logs include generated IDs, stages, elapsed time and error types.
+They exclude API keys and coordinates.
+
+`api/route-proxy.py` is an optional diagnostic endpoint, unused by the Worker.
+It requires sensitive Vercel variables `ORS_API_KEY` and `ROUTING_PROXY_TOKEN`.
+Requests require the proxy token as a Bearer credential. Never expose these secrets to Vite.
+Proxy checks reached their 25-second timeout; switching production needs further verification.

@@ -748,9 +748,10 @@ export default function App() {
         map.fitBounds(bounds, { padding: { top: 200, right: 75, bottom: 180, left: 30 }, maxZoom: 16 });
       }
     };
-    if (map.isStyleLoaded()) draw();
-    else map.once('load', draw);
-    return () => { map.off('load', draw); };
+    // Tile downloads can keep isStyleLoaded false after the one-time load event.
+    if (map.getLayer('osm')) draw();
+    else map.once('style.load', draw);
+    return () => { map.off('style.load', draw); };
   }, [plannedRoute]);
 
   const vehicleList = useMemo(() => {
