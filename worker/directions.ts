@@ -13,7 +13,7 @@ export async function calculateDirections(key: string, start: Coordinates, end: 
   try {
     const response = await fetch('https://api.heigit.org/openrouteservice/v2/directions/driving-car/geojson', {
       method: 'POST', headers: { Authorization: key, 'content-type': 'application/json' },
-      body: JSON.stringify({ coordinates: [start, end], instructions: false }), signal: AbortSignal.timeout(45_000),
+      body: JSON.stringify({ coordinates: [start, end], instructions: false, geometry_simplify: true }), signal: AbortSignal.timeout(45_000),
     });
     stage = 'headers';
     log(stage, { status: response.status });
