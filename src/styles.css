@@ -70,7 +70,7 @@ h1 { margin: 0; color: #17221f; font-size: clamp(21px, 5vw, 28px); font-weight: 
 .vehicle-code-editor { min-height: 58px; resize: vertical; }
 .trip-actions { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 7px; }
 .trip-code-group { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; min-width: 0; }
-.trip-input { min-width: 0; border: 1px solid #d5e1d8; border-radius: 10px; padding: 9px 10px; color: #244b37; background: #fff; font-size: 11px; outline: none; }
+.trip-input { min-width: 0; border: 1px solid #d5e1d8; border-radius: 10px; padding: 9px 10px; color: #244b37; background: #fff; font-size: 16px; outline: none; }
 .trip-input:focus { border-color: #4ca56e; box-shadow: 0 0 0 3px rgba(76,165,110,.14); }
 .destination-row { display: flex; gap: 8px; margin-top: 12px; }
 .destination-row .trip-input { flex: 1; }
