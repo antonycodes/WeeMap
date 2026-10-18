@@ -697,6 +697,18 @@ export default function App() {
     return route ? formatRouteEstimate(route) : `${formatDistance(distanceBetweenKm(position, other))} đường thẳng`;
   };
 
+  const nearbyVehicles = vehicleList.filter((vehicle) => vehicle.memberId !== memberId && !vehicle.memberId.startsWith('slot:')).map((vehicle) => {
+    const location = displayedMembers[vehicle.memberId];
+    const fresh = position && location && !isLiveLocationStale(new Date(position.timestamp).toISOString(), signalCheckAt) && !isLiveLocationStale(location.recordedAt, signalCheckAt);
+    const route = fresh && routeEstimates && signalCheckAt - routeEstimates.calculatedAt <= 90_000
+      ? routeEstimates.routes.find((estimate) => estimate.memberId === vehicle.memberId) : undefined;
+    return { ...vehicle, distance: fresh ? distanceBetweenKm(position, location) : undefined, route };
+  });
+  const diagramUsesRoad = nearbyVehicles.some((vehicle) => vehicle.distance !== undefined)
+    && nearbyVehicles.filter((vehicle) => vehicle.distance !== undefined).every((vehicle) => vehicle.route);
+  const diagramVehicles = nearbyVehicles.map((vehicle) => ({ ...vehicle, distance: diagramUsesRoad ? vehicle.route ? vehicle.route.distanceMeters / 1000 : undefined : vehicle.distance }))
+    .sort((a, b) => (a.distance ?? Infinity) - (b.distance ?? Infinity) || a.displayName.localeCompare(b.displayName));
+
   return (
     <main className="map-shell">
       <section className="map-stage" aria-label="Bản đồ WeeMap">
@@ -728,6 +740,15 @@ export default function App() {
           <button className="map-control locate-control" type="button" aria-label="Vị trí hiện tại" disabled={!position} onClick={() => position && mapInstance.current?.flyTo({ center: [position.longitude, position.latitude], zoom: Math.max(mapZoom, 15) })}><img src="/icons/navigator.png" alt="" /></button>
           <button className="map-control refresh-control" type="button" aria-label="Làm mới vị trí" onClick={() => window.location.reload()}><img src="/icons/refresh.png" alt="" /></button>
         </div>
+
+        {tripId && memberReady && !panelOpen && <section className="convoy-diagram" aria-label="Khoảng cách các xe từ bạn">
+          <h2>Khoảng cách từ bạn</h2>
+          <p>Gần → xa · {diagramUsesRoad ? 'đường ô tô' : 'đường thẳng'}</p>
+          <ol className="convoy-nodes">
+            <li className="convoy-node"><strong style={{ backgroundColor: getVehicleColor(memberId) }}>{selectedVehicleCode || 'Xe của bạn'}</strong><span>Bạn</span></li>
+            {diagramVehicles.map((vehicle) => <li className="convoy-node" key={vehicle.memberId}><strong style={{ backgroundColor: getVehicleColor(vehicle.memberId) }}>{vehicle.displayName}</strong><span>{vehicle.distance === undefined ? vehicleDistance(vehicle.memberId) : formatDistance(vehicle.distance)}</span></li>)}
+          </ol>
+        </section>}
 
         {panelOpen && <div className="map-sheet" role="dialog" aria-label="Thiết lập chuyến đi">
           <div className="sheet-heading"><div><span className="eyebrow">CHUYẾN ĐI</span><h1>{tripId ? tripInfo?.name ?? 'Đoàn xe đang chạy' : setupMode === 'create' ? 'Tạo chuyến mới' : setupMode === 'join' ? 'Tham gia chuyến' : 'Hôm nay bạn muốn đi đâu ?'}</h1></div>{serverState === 'ok' && <span className="connection-pill connection-ok">Trực tuyến</span>}</div>
